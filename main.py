@@ -23,13 +23,13 @@ import numpy as np
 
 from depth_ar import (
     SphereRenderer, Object3D, Physics, composite, normalize_depth, depth_to_color,
-    near_cube, grab_move, sample_close, screen_velocity_to_world, VelocityTracker,
+    near_cube, grab_move, collide_ball, VelocityTracker,
 )
 
 HELP_LINES = [
     "WASD: move   Q/E: closer/farther   +/-: size   [ ]: depth scale k",
     "Close your whole hand over the ball to grab & move it",
-    "Gravity ON: release = ballistic throw, or KICK with your foot",
+    "Not grabbing? Hands & feet HIT the ball and it bounces off (gravity ON)",
     "Gravity OFF: no physics (the ball just stays where you leave it)",
     "SPACE: gravity on/off   V: depth   H: help   R: reset   ESC: quit",
 ]
@@ -62,13 +62,15 @@ def parse_args():
     p.add_argument("--throw-window", type=float, default=0.15,
                    help="seconds of velocity history averaged into the throw speed")
     p.add_argument("--no-feet", action="store_true",
-                   help="disable MediaPipe pose / foot kicking")
-    p.add_argument("--kick-speed", type=float, default=1.5,
-                   help="min foot speed (world units/s) to register a kick")
-    p.add_argument("--kick-gain", type=float, default=1.4,
-                   help="how much of the foot's velocity is transferred to the ball")
-    p.add_argument("--kick-reach", type=float, default=55.0,
-                   help="foot-to-ball reach in px to count as a touch")
+                   help="disable MediaPipe pose / foot hitting")
+    p.add_argument("--hit-restitution", type=float, default=0.9,
+                   help="bounciness when a hand/foot hits the ball (0..1+)")
+    p.add_argument("--hit-speed", type=float, default=1.2,
+                   help="min impact speed (world units/s) to register a hit")
+    p.add_argument("--hit-gain", type=float, default=1.0,
+                   help="scale applied to the post-hit ball speed (>1 = livelier)")
+    p.add_argument("--hit-reach", type=float, default=55.0,
+                   help="hand/foot-to-ball reach in px to count as a touch")
     return p.parse_args()
 
 
@@ -98,7 +100,7 @@ def draw_hand(img, hand, grabbed):
 
 
 def draw_foot(img, foot, hot):
-    """Draw the toe point; bright when it can kick the ball."""
+    """Draw the toe point; bright when it just hit the ball."""
     px, py = int(foot.point[0]), int(foot.point[1])
     color = (0, 255, 255) if hot else (120, 120, 120)
     cv2.circle(img, (px, py), 9, color, 2, cv2.LINE_AA)
@@ -169,7 +171,7 @@ def main():
         try:
             from depth_ar.pose_tracker import PoseTracker
             pose = PoseTracker()
-            print("Foot tracking enabled (kick the ball; gravity must be ON).")
+            print("Foot tracking enabled (hit the ball with your foot; gravity ON).")
         except Exception as exc:
             print(f"Foot tracking disabled ({exc}). Install mediapipe to enable.")
 
@@ -180,8 +182,7 @@ def main():
     grab_label = None           # which hand (Left/Right) is holding the ball
     prev_grab_pos = None        # last ball pos while grabbed (for throw velocity)
     throw_vel = VelocityTracker(window=args.throw_window)
-    prev_feet = {}              # label -> last toe pixel (for foot velocity)
-    kick_cooldown = 0.0         # seconds until another kick is allowed
+    prev_hitters = {}           # hitter id -> last pixel pos (for hit velocity)
     frame_idx = 0
     last = time.time()
     fps = 0.0
@@ -263,31 +264,31 @@ def main():
                 throw_vel.add(now, (cur - prev_grab_pos) / max(dt, 1e-3))
             prev_grab_pos = cur
 
-        # Foot interaction: kick the ball. A kick imparts velocity, so it only
-        # produces motion when gravity is ON (gravity OFF runs no physics).
+        # Collision interaction: when NOT holding the ball, hands and feet act as
+        # moving colliders — touch the ball and it bounces off. A hit imparts
+        # velocity, so it only moves the ball when gravity is ON.
         feet = pose.process(frame) if pose is not None else []
-        kick_cooldown = max(0.0, kick_cooldown - dt)
-        hot_feet = set()
-        ball_close = obj.scale_k / max(obj.tz, 1e-3)
-        for foot in feet:
-            cur = foot.point
-            prev = prev_feet.get(foot.label)
-            prev_feet[foot.label] = cur.copy()
-            if grabbed or prev is None:
+        hit_ids = set()
+        hitters = []
+        if not grabbed:
+            for h in hands:               # palm of every hand
+                hitters.append((f"hand:{h.label}", h.point))
+            for foot in feet:             # toe of every foot
+                hitters.append((f"foot:{foot.label}", foot.point))
+
+        seen_ids = set()
+        for hid, cur in hitters:
+            seen_ids.add(hid)
+            prev = prev_hitters.get(hid)
+            prev_hitters[hid] = np.asarray(cur, dtype=np.float64)
+            if prev is None or not physics.enabled:
                 continue
-            if not near_cube(renderer, obj, cur[0], cur[1], extra_px=args.kick_reach):
-                continue
-            wvx, wvy = screen_velocity_to_world(renderer, prev, cur, obj.tz, dt)
-            speed = (wvx * wvx + wvy * wvy) ** 0.5
-            # Depth gate: the foot must be at / in front of the ball's depth.
-            foot_close = sample_close(scene_close, cur[0], cur[1])
-            if physics.enabled and foot_close >= ball_close - 0.3 and speed >= args.kick_speed:
-                hot_feet.add(foot.label)
-                if kick_cooldown <= 0.0:
-                    obj.set_velocity(wvx * args.kick_gain, wvy * args.kick_gain, 0.0)
-                    obj.on_ground = False   # wake a resting ball so it launches
-                    kick_cooldown = 0.3
-        prev_feet = {f.label: prev_feet[f.label] for f in feet}
+            if collide_ball(obj, renderer, prev, cur, dt, scene_close,
+                            restitution=args.hit_restitution, reach_px=args.hit_reach,
+                            min_speed=args.hit_speed, gain=args.hit_gain):
+                hit_ids.add(hid)
+        # Keep history only for hitters still tracked this frame.
+        prev_hitters = {k: prev_hitters[k] for k in seen_ids}
 
         if grabbed:
             # Held by the hand: position is set directly, physics paused.
@@ -301,7 +302,7 @@ def main():
         for h in hands:
             draw_hand(out, h, grabbed and h.label == grab_label)
         for foot in feet:
-            draw_foot(out, foot, foot.label in hot_feet)
+            draw_foot(out, foot, f"foot:{foot.label}" in hit_ids)
 
         if show_depth:
             dvis = depth_to_color(scene_close)

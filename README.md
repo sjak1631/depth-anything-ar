@@ -106,20 +106,24 @@ Flags: `--no-hands` (disable), `--max-hands N` (default 2), `--grasp-on` /
 `--grasp-off` (how closed the hand must be, normalized by hand size),
 `--no-depth-follow` (keep `tz` fixed while dragging).
 
-## Kick with your foot (MediaPipe Pose)
+## Hit & bounce (hands and feet)
 
-The webcam also tracks your body, so you can **kick** the ball with your foot.
-When a foot (toe) sweeps into the ball fast enough — and is at roughly the ball's
-depth — the foot's velocity is transferred to the ball. Because a kick is an
-impulse (it sets the ball's velocity), it only produces motion when **gravity is
-ON** (gravity off runs no physics): the ball gets launched and arcs ballistically.
+When you are **not** holding the ball, your **hands and feet act as moving
+colliders** — touch the ball and it bounces off. The hitter is treated as an
+infinitely heavy moving paddle: with contact normal `n` (from the hitter to the
+ball) and the relative velocity along it, the ball reflects that component
+(`v' = v - (1+e)·vₙ·n`). So a resting ball struck by a moving hand shoots away in
+the hit direction with the hand's speed, and a ball flying at you is bounced back.
+Feet are tracked with MediaPipe Pose so you can kick it too.
 
-The toe marker brightens (yellow) when a foot is in range and moving fast enough
-to kick. A short cooldown prevents one swing from registering many times.
+A hit only registers when the hitter is at roughly the ball's depth and actually
+moving into it (a receding or too-gentle touch adds no energy, which avoids
+jitter). Because a hit imparts velocity, it only moves the ball when **gravity is
+ON** (gravity off runs no physics).
 
-Flags: `--no-feet` (disable), `--kick-speed` (min foot speed to register, world
-units/s), `--kick-gain` (fraction of foot velocity transferred; >1 = livelier),
-`--kick-reach` (foot-to-ball reach in px to count as a touch).
+Flags: `--no-feet` (disable foot tracking), `--hit-restitution` (bounciness),
+`--hit-speed` (min impact speed to register), `--hit-gain` (scale post-hit speed;
+>1 = livelier), `--hit-reach` (hand/foot-to-ball reach in px).
 
 ## Project layout
 
@@ -131,9 +135,9 @@ depth_ar/
   object3d.py               # object pose/velocity state + keyboard mapping
   compositor.py             # depth normalize + occlusion compositing
   physics.py                # gravity-on 3D ballistic sim; gravity-off = no physics
-  interaction.py            # grab/move/kick geometry (numpy only)
+  interaction.py            # grab/move + collision (hit/bounce) geometry (numpy only)
   hand_tracker.py           # MediaPipe hand + whole-hand grasp detection (optional)
-  pose_tracker.py           # MediaPipe pose + foot tracking for kicking (optional)
+  pose_tracker.py           # MediaPipe pose + foot tracking for hitting (optional)
 tools/selftest.py           # offline numpy-only check (no camera/torch needed)
 ```
 

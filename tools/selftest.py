@@ -177,27 +177,41 @@ def physics_checks(W, H):
     print(f"[ok] ballistic throw (gravity on): arced right to x={x_max:.2f}, "
           f"peaked at y={y_max:.2f}, fell to y={obj6.ty:.2f}")
 
-    # 10) Kick: a foot's screen motion converts to a world velocity that, under
-    #     gravity, launches a resting ball (and does nothing in gravity-off).
-    from depth_ar import screen_velocity_to_world
+    # 10) Hit/bounce: a moving hitter (hand or foot) striking a resting ball
+    #     pushes it away along the contact normal, and under gravity it flies.
+    from depth_ar import collide_ball
 
     renderer2 = SphereRenderer(W, H)
     obj7 = Object3D(tx=0.0, ty=0.0, tz=3.0, scale_k=3.0, size=0.4)
-    obj7.on_ground = True                      # ball is resting
+    obj7.on_ground = True                          # ball is resting
+    scene_near = np.full((H, W), 1.0, np.float32)  # hitter at the ball's depth
     cu, cv = renderer2.project_point(obj7.tx, obj7.ty, obj7.tz)
-    p_prev = np.array([cu - 30, cv], np.float32)
-    p_cur = np.array([cu + 30, cv], np.float32)   # foot sweeps left->right past it
-    wvx, wvy = screen_velocity_to_world(renderer2, p_prev, p_cur, obj7.tz, dt)
-    assert wvx > 0, "rightward foot sweep should give +x world velocity"
-    obj7.set_velocity(wvx, wvy, 0.0)
-    obj7.on_ground = False
+    # Hitter on the LEFT, sweeping rightward into the ball.
+    p_prev = np.array([cu - 40, cv], np.float64)
+    p_cur = np.array([cu - 18, cv], np.float64)
+    hit = collide_ball(obj7, renderer2, p_prev, p_cur, dt, scene_near,
+                       restitution=0.9, reach_px=60, min_speed=0.5)
+    assert hit, "moving hitter on the ball should register a hit"
+    assert obj7.vx > 0, "ball struck from the left should be pushed to the right"
+    print(f"[ok] hit: strike from the left -> ball velocity vx={obj7.vx:.2f}")
+
+    # The struck ball then flies sideways under gravity.
     phys7 = Physics(gravity=4.0)
     phys7.enabled = True
     x0 = obj7.tx
+    x_max = x0
     for _ in range(40):
         phys7.step(obj7, renderer2, empty, dt)
-    assert obj7.tx > x0 + 0.1, "kicked ball should fly sideways under gravity"
-    print(f"[ok] kick: foot sweep -> ball launched to x={obj7.tx:.2f}")
+        x_max = max(x_max, obj7.tx)
+    assert x_max > x0 + 0.1, "bounced ball should fly sideways under gravity"
+
+    # A hitter that is not approaching (moving away) must NOT add energy.
+    obj8 = Object3D(tx=0.0, ty=0.0, tz=3.0, scale_k=3.0, size=0.4)
+    q_prev = np.array([cu - 18, cv], np.float64)
+    q_cur = np.array([cu - 40, cv], np.float64)     # moving away to the left
+    assert not collide_ball(obj8, renderer2, q_prev, q_cur, dt, scene_near,
+                            min_speed=0.5), "a receding hitter must not hit the ball"
+    print("[ok] hit gate: a receding hitter adds no energy")
 
 
 def interaction_checks(W, H):

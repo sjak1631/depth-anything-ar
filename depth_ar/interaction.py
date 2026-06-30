@@ -79,6 +79,53 @@ def screen_velocity_to_world(renderer, p_prev, p_cur, z: float, dt: float):
     return (x1 - x0) / dt, (y1 - y0) / dt
 
 
+def collide_ball(
+    obj,
+    renderer,
+    p_prev,
+    p_cur,
+    dt,
+    scene_close,
+    restitution: float = 0.9,
+    reach_px: float = 55.0,
+    min_speed: float = 1.2,
+    depth_tol: float = 0.3,
+    gain: float = 1.0,
+) -> bool:
+    """Bounce the ball off a moving hitter (hand or foot). Returns True on a hit.
+
+    The hitter is treated as an infinitely heavy moving paddle. With contact
+    normal ``n`` (from hitter to ball centre) and relative velocity along it
+    ``vn = (v_ball - v_hitter)·n``, an approaching contact (``vn < 0``) reflects
+    that normal component:  ``v_ball' = v_ball - (1 + e)·vn·n``. A resting ball
+    struck by a moving hand thus shoots away along ``n`` with the hand's speed;
+    a fast incoming ball is bounced back. Only meaningful with gravity on (the
+    velocity is integrated by the physics step).
+    """
+    if not near_cube(renderer, obj, p_cur[0], p_cur[1], extra_px=reach_px):
+        return False
+    ball_close = obj.scale_k / max(obj.tz, 1e-3)
+    if sample_close(scene_close, p_cur[0], p_cur[1]) < ball_close - depth_tol:
+        return False  # hitter is well behind the ball in depth -> no contact
+
+    hx, hy = renderer.unproject(p_cur[0], p_cur[1], obj.tz)
+    n = np.array([obj.tx - hx, obj.ty - hy], dtype=np.float64)
+    d = float(np.linalg.norm(n))
+    n = n / d if d > 1e-6 else np.array([0.0, 1.0])
+
+    hvx, hvy = screen_velocity_to_world(renderer, p_prev, p_cur, obj.tz, dt)
+    v_ball = np.array([obj.vx, obj.vy], dtype=np.float64)
+    v_rel = v_ball - np.array([hvx, hvy])
+    vn = float(v_rel @ n)
+    if vn >= 0 or abs(vn) < min_speed:   # separating or too gentle
+        return False
+
+    v_new = (v_ball - (1.0 + restitution) * vn * n) * gain
+    obj.vx, obj.vy = float(v_new[0]), float(v_new[1])
+    obj.on_ground = False
+    return True
+
+
 def grab_move(
     obj,
     renderer,
