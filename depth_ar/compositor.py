@@ -29,6 +29,19 @@ def normalize_depth(
     return np.clip((d - lo) / (hi - lo), 0.0, 1.0)
 
 
+def metric_closeness(depth_m: np.ndarray, dmin: float = 0.2, dmax: float = 10.0) -> np.ndarray:
+    """Convert a metric depth map (meters, larger = farther) to closeness ``1/Z``.
+
+    A metric model (e.g. Depth-Anything-V2-Metric-Indoor) outputs true depth in
+    meters. Inverse depth ``1 / Z`` is exactly the *closeness* the renderer
+    produces with ``scale_k = 1`` (``k / Z`` -> ``1 / Z``), so the ball's metric
+    depth and the scene's metric depth compare directly — no manual scale needed.
+    Depth is clamped to ``[dmin, dmax]`` meters before inverting to bound noise.
+    """
+    d = np.clip(depth_m.astype(np.float32), dmin, dmax)
+    return 1.0 / d
+
+
 def composite(
     frame: np.ndarray,
     scene_close: np.ndarray,
@@ -73,8 +86,14 @@ def composite(
 
 
 def depth_to_color(scene_close: np.ndarray) -> np.ndarray:
-    """Colourize a closeness map for a debug overlay (requires OpenCV)."""
+    """Colourize a closeness map for a debug overlay (requires OpenCV).
+
+    Works for both relative closeness ([0,1]) and metric inverse depth (1/m) by
+    normalizing against the map's own 95th percentile.
+    """
     import cv2
 
-    vis = (np.clip(scene_close, 0, 1) * 255).astype(np.uint8)
+    hi = float(np.percentile(scene_close, 95)) if scene_close.size else 1.0
+    hi = max(hi, 1e-6)
+    vis = (np.clip(scene_close / hi, 0, 1) * 255).astype(np.uint8)
     return cv2.applyColorMap(vis, cv2.COLORMAP_INFERNO)

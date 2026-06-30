@@ -51,8 +51,33 @@ python main.py --infer-size 308   # smaller depth input = faster, coarser
 ```
 
 Useful flags: `--no-fp16` (disable half precision), `--no-mirror`,
-`--invert-depth` (for true metric models), `--bias` (occlusion edge tuning),
-`--feather` (soften occlusion edges, px).
+`--bias` (occlusion edge tuning), `--feather` (soften occlusion edges, px).
+
+### Metric mode (real meters)
+
+```bash
+python main.py --metric          # Depth-Anything-V2-Metric-Indoor-Small, real meters
+```
+
+By default the demo uses the **relative** model and a manual scale `k` to line up
+the ball with the scene. With `--metric` it instead uses
+**Depth-Anything-V2-Metric-Indoor-Small**, which outputs depth in real meters, so
+everything works in physical units:
+
+- Scene depth → closeness as inverse depth `1/Z`. The renderer already produces
+  `k/Z`, so with `k = 1` the ball's depth and the scene's depth compare directly
+  — **no manual scale needed**.
+- The ball lives in meters (`tz` in m, radius in m), gravity is `9.8 m/s²`, and
+  throw/hit velocities are in m/s.
+- Grabbing snaps the ball to the **real metric depth** under your hand.
+
+Tunables: `--metric-min` / `--metric-max` (clamp the depth range, m), `--fov`
+(camera horizontal field of view used for rendering — set it close to your
+webcam's for correct on-screen ball size), and the usual `--gravity` /
+`--restitution` (default to metric-appropriate values in this mode).
+
+The Metric-Indoor model is trained for indoor scenes; for outdoor use, pass
+`--model depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf`.
 
 ## Controls
 
@@ -156,5 +181,5 @@ python tools/selftest.py     # writes previews to out/*.ppm
   camera makes the alignment `k` drift.
 - Monocular depth is noisy at thin structures and edges; `--feather` and
   `--bias` help smooth contact boundaries.
-- For real-world metric placement, switch to a `Depth-Anything-V2-Metric-*`
-  model and pass `--invert-depth`.
+- For real-world metric placement (depth in meters, no manual scale), use
+  `--metric` (see *Metric mode* above).

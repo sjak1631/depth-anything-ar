@@ -22,9 +22,12 @@ import cv2
 import numpy as np
 
 from depth_ar import (
-    SphereRenderer, Object3D, Physics, composite, normalize_depth, depth_to_color,
-    near_cube, grab_move, collide_ball, VelocityTracker,
+    SphereRenderer, Object3D, Physics, composite, normalize_depth, metric_closeness,
+    depth_to_color, near_cube, grab_move, collide_ball, VelocityTracker,
 )
+
+RELATIVE_MODEL = "depth-anything/Depth-Anything-V2-Small-hf"
+METRIC_MODEL = "depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf"
 
 HELP_LINES = [
     "WASD: move   Q/E: closer/farther   +/-: size   [ ]: depth scale k",
@@ -40,18 +43,26 @@ def parse_args():
     p.add_argument("--source", default="0", help="camera index or video path")
     p.add_argument("--width", type=int, default=960)
     p.add_argument("--height", type=int, default=540)
-    p.add_argument("--model", default="depth-anything/Depth-Anything-V2-Small-hf")
+    p.add_argument("--metric", action="store_true",
+                   help="metric mode: real meters via Depth-Anything-V2-Metric-Indoor-Small")
+    p.add_argument("--model", default=None, help="override the depth model id")
+    p.add_argument("--metric-min", type=float, default=0.2, help="metric: clamp near depth (m)")
+    p.add_argument("--metric-max", type=float, default=10.0, help="metric: clamp far depth (m)")
+    p.add_argument("--fov", type=float, default=60.0,
+                   help="camera horizontal field of view (deg) used for rendering")
     p.add_argument("--infer-size", type=int, default=392, help="depth inference long side (px)")
     p.add_argument("--depth-interval", type=int, default=1, help="run depth every N frames")
     p.add_argument("--cpu", action="store_true", help="force CPU inference")
     p.add_argument("--no-fp16", action="store_true", help="disable half precision on GPU")
     p.add_argument("--no-mirror", action="store_true", help="do not flip the webcam horizontally")
     p.add_argument("--invert-depth", action="store_true",
-                   help="set if model outputs larger=farther (metric models)")
+                   help="(relative mode) set if model outputs larger=farther")
     p.add_argument("--bias", type=float, default=0.0, help="occlusion bias (-1..1)")
     p.add_argument("--feather", type=int, default=1, help="edge feather radius in px (0=off)")
-    p.add_argument("--gravity", type=float, default=3.5, help="gravity strength (world units/s^2)")
-    p.add_argument("--restitution", type=float, default=0.4, help="bounciness 0..1 on collision")
+    p.add_argument("--gravity", type=float, default=None,
+                   help="gravity (units/s^2); default 9.8 metric, 3.5 relative")
+    p.add_argument("--restitution", type=float, default=None,
+                   help="bounciness 0..1; default 0.5 metric, 0.4 relative")
     p.add_argument("--no-hands", action="store_true", help="disable MediaPipe hand grabbing")
     p.add_argument("--max-hands", type=int, default=2, help="max hands to track")
     p.add_argument("--grasp-on", type=float, default=1.0,
@@ -108,14 +119,20 @@ def draw_foot(img, foot, hot):
                 0.5, color, 1, cv2.LINE_AA)
 
 
-def draw_overlay(img, obj, fps, show_help, physics):
+def draw_overlay(img, obj, fps, show_help, physics, metric):
     phys = "ON" if physics.enabled else "off"
     if physics.enabled and obj.on_ground:
         phys = "RESTING"
-    lines = [
-        f"fps {fps:4.1f}  tz {obj.tz:4.2f}  k {obj.scale_k:4.2f}  "
-        f"size {obj.size:4.2f}  gravity {phys}",
-    ]
+    if metric:
+        lines = [
+            f"fps {fps:4.1f}  [metric]  tz {obj.tz:4.2f}m  "
+            f"r {obj.size:4.2f}m  gravity {phys}",
+        ]
+    else:
+        lines = [
+            f"fps {fps:4.1f}  tz {obj.tz:4.2f}  k {obj.scale_k:4.2f}  "
+            f"size {obj.size:4.2f}  gravity {phys}",
+        ]
     if show_help:
         lines += HELP_LINES
     y = 22
@@ -139,19 +156,29 @@ def main():
         raise RuntimeError("Failed to read the first frame from the source.")
     H, W = frame.shape[:2]
 
+    model_name = args.model or (METRIC_MODEL if args.metric else RELATIVE_MODEL)
     device = "cpu" if args.cpu else None
-    print(f"Loading {args.model} ...")
+    print(f"Loading {model_name} ({'metric' if args.metric else 'relative'}) ...")
     estimator = DepthEstimator(
-        model_name=args.model,
+        model_name=model_name,
         device=device,
         fp16=not args.no_fp16,
         infer_size=args.infer_size,
     )
     print(f"Depth model ready on: {estimator.device}")
 
-    renderer = SphereRenderer(W, H)
-    obj = Object3D()
-    physics = Physics(gravity=args.gravity, restitution=args.restitution)
+    renderer = SphereRenderer(W, H, fov_deg=args.fov)
+    gravity = args.gravity if args.gravity is not None else (9.8 if args.metric else 3.5)
+    restitution = args.restitution if args.restitution is not None else (0.5 if args.metric else 0.4)
+    if args.metric:
+        # Metric mode: everything is in real meters; closeness = 1/Z so scale_k=1.
+        obj = Object3D(tz=1.5, size=0.12, scale_k=1.0,
+                       move_step=0.05, depth_step=0.1, size_step=0.02)
+        physics = Physics(gravity=gravity, restitution=restitution,
+                          sleep_speed=0.05, tz_near=0.3, tz_far=8.0)
+    else:
+        obj = Object3D()
+        physics = Physics(gravity=gravity, restitution=restitution)
 
     tracker = None
     if not args.no_hands:
@@ -207,7 +234,10 @@ def main():
 
         if frame_idx % max(1, args.depth_interval) == 0:
             depth = estimator.infer(frame)
-            scene_close = normalize_depth(depth, invert=args.invert_depth)
+            if args.metric:
+                scene_close = metric_closeness(depth, args.metric_min, args.metric_max)
+            else:
+                scene_close = normalize_depth(depth, invert=args.invert_depth)
 
         # Hand interaction: close your whole hand over the ball to grab it.
         hands = tracker.process(frame) if tracker is not None else []
@@ -308,7 +338,7 @@ def main():
             dvis = depth_to_color(scene_close)
             out = cv2.addWeighted(out, 0.6, dvis, 0.4, 0)
 
-        draw_overlay(out, obj, fps, show_help, physics)
+        draw_overlay(out, obj, fps, show_help, physics, args.metric)
 
         cv2.imshow(win, out)
         key = cv2.waitKey(1) & 0xFF

@@ -79,9 +79,57 @@ def main() -> int:
 
     physics_checks(W, H)
     interaction_checks(W, H)
+    metric_checks(W, H)
 
     print("ALL CHECKS PASSED")
     return 0
+
+
+def metric_checks(W, H):
+    """Metric mode: scene depth in meters -> closeness 1/Z, scale_k = 1."""
+    from depth_ar import metric_closeness, Physics
+
+    # Inverse-depth conversion with clamping.
+    depth = np.array([[1.0, 2.0], [5.0, 0.05]], np.float32)  # meters
+    close = metric_closeness(depth, dmin=0.2, dmax=10.0)
+    assert abs(close[0, 0] - 1.0) < 1e-5 and abs(close[0, 1] - 0.5) < 1e-5
+    assert abs(close[1, 1] - 1.0 / 0.2) < 1e-5, "near depth must clamp to dmin"
+    print("[ok] metric: depth(m) -> closeness 1/Z with clamping")
+
+    # Metric occlusion: a ball at tz=1.5 m (scale_k=1 -> close 1/1.5=0.667) is in
+    # front of a 3 m wall but behind a 0.8 m wall — no manual scale needed.
+    renderer = SphereRenderer(W, H)
+    obj = Object3D(tx=0.0, ty=0.0, tz=1.5, scale_k=1.0, size=0.3)
+    buf = renderer.render(obj)
+    yy, xx = np.mgrid[0:H, 0:W]
+    frame = np.stack([xx / W * 255, yy / H * 255, np.full_like(xx, 90)], -1).astype(np.uint8)
+
+    far = metric_closeness(np.full((H, W), 3.0, np.float32))   # 3 m wall (behind)
+    out_far = composite(frame, far, buf, edge_feather=0)
+    assert int((out_far != frame).any(-1).sum()) > 0.9 * int(buf.mask.sum()), \
+        "ball at 1.5 m should be visible in front of a 3 m wall"
+
+    near = metric_closeness(np.full((H, W), 0.8, np.float32))  # 0.8 m wall (front)
+    out_near = composite(frame, near, buf, edge_feather=0)
+    assert int((out_near != frame).any(-1).sum()) == 0, \
+        "ball at 1.5 m must be occluded by a 0.8 m wall"
+    print("[ok] metric: ball occluded by depth in real meters (no manual k)")
+
+    # Metric gravity: the ball falls under 9.8 m/s^2 and lands on a 1.5 m shelf.
+    shelf = metric_closeness(np.full((H, W), 9.0, np.float32))  # far background
+    shelf[H // 2:, :] = metric_closeness(np.full((1,), 1.5, np.float32))[0]  # 1.5 m floor
+    obj2 = Object3D(tx=0.0, ty=0.6, tz=1.5, scale_k=1.0, size=0.15,
+                    move_step=0.05, depth_step=0.1)
+    phys = Physics(gravity=9.8, restitution=0.4, sleep_speed=0.05, tz_near=0.3, tz_far=8.0)
+    phys.enabled = True
+    landed = False
+    for _ in range(600):
+        phys.step(obj2, renderer, shelf, 1.0 / 60)
+        if obj2.on_ground:
+            landed = True
+            break
+    assert landed, "metric ball never rested on the 1.5 m floor"
+    print("[ok] metric: ball falls at 9.8 m/s^2 and rests on the 1.5 m floor")
 
 
 def _bottom_row(buf):
