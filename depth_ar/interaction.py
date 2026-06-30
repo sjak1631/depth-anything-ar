@@ -30,8 +30,8 @@ def sample_close_nearest(scene_close: np.ndarray, points, win: int = 7) -> float
     """Closeness of the *nearest* surface among several probe points.
 
     The hand is the foreground, so taking the maximum closeness over hand
-    landmarks rejects the far background that shows through the gap between the
-    fingers as a pinch is released (the cause of the cube flying away)."""
+    landmarks rejects the far background that shows through the gaps between the
+    fingers as the hand opens (the cause of the ball flying away)."""
     vals = [sample_close(scene_close, p[0], p[1], win) for p in points]
     return max(vals) if vals else 0.0
 
@@ -63,10 +63,10 @@ def grab_move(
     the hand: ``k / tz = scene_close`` -> ``tz = k / scene_close`` (EMA-smoothed).
     Then x/y are unprojected from the screen point at that depth.
 
-    To avoid the cube flying into the distance when a pinch is released, depth is
+    To avoid the ball flying into the distance when the hand opens, depth is
     sampled from the *nearest* of several hand landmarks (``depth_points``) rather
-    than the thumb-index midpoint, and the per-frame depth change is slew-limited
-    by ``max_tz_step``.
+    than a single point, and the per-frame depth change is slew-limited by
+    ``max_tz_step``.
     """
     if depth_follow:
         if depth_points is not None and len(depth_points) > 0:

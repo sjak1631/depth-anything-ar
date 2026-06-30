@@ -1,9 +1,9 @@
-"""MediaPipe hand tracking + pinch detection (MediaPipe Tasks API, >=0.10).
+"""MediaPipe hand tracking + whole-hand grasp detection (Tasks API, >=0.10).
 
 Isolated here so the rest of the package imports without MediaPipe installed.
-``process`` returns a :class:`HandState` (pinch midpoint in pixels, a pinch
-flag with hysteresis, and the 21 landmarks for drawing) or ``None`` when no
-hand is visible.
+``process`` returns a list of :class:`HandState` (one per detected hand) with the
+palm-centre point in pixels, a *grasp* flag (the whole hand closing into a fist,
+with hysteresis), a Left/Right label for stable identity, and the 21 landmarks.
 """
 
 from __future__ import annotations
@@ -25,24 +25,26 @@ _MODEL_PATH = os.path.join(
 
 @dataclass
 class HandState:
-    point: np.ndarray         # (2,) pixel of the thumb-index midpoint
-    pinching: bool
+    point: np.ndarray         # (2,) palm-centre pixel (grab anchor)
+    grasping: bool
     landmarks_px: np.ndarray  # (21, 2) pixel landmark coordinates
+    label: str = "?"          # "Left" / "Right" (stable identity key)
 
 
 class HandTracker:
     WRIST = 0
-    THUMB_TIP = 4
-    INDEX_MCP = 5
-    INDEX_TIP = 8
+    MCPS = (5, 9, 13, 17)              # finger knuckles (palm)
+    PALM = (0, 5, 9, 13, 17)          # wrist + knuckles -> palm centroid
+    FINGERTIPS = (8, 12, 16, 20)      # index..pinky tips (not thumb)
+    PALM_REF = 9                       # middle-finger MCP
 
     def __init__(
         self,
-        max_hands: int = 1,
+        max_hands: int = 2,
         det_conf: float = 0.6,
         track_conf: float = 0.5,
-        pinch_on: float = 0.45,
-        pinch_off: float = 0.7,
+        grasp_on: float = 1.0,
+        grasp_off: float = 1.3,
     ):
         import mediapipe as mp
         from mediapipe.tasks.python import BaseOptions
@@ -66,11 +68,11 @@ class HandTracker:
             min_tracking_confidence=track_conf,
         )
         self._detector = HandLandmarker.create_from_options(options)
-        self.pinch_on = pinch_on
-        self.pinch_off = pinch_off
-        self._pinching = False
+        self.grasp_on = grasp_on
+        self.grasp_off = grasp_off
+        self._grasp_state: dict[str, bool] = {}   # per-label hysteresis
 
-    def process(self, frame_bgr) -> "HandState | None":
+    def process(self, frame_bgr) -> "list[HandState]":
         import cv2
         import mediapipe as mp
 
@@ -80,25 +82,38 @@ class HandTracker:
         result = self._detector.detect(mp_image)
 
         if not result.hand_landmarks:
-            self._pinching = False
-            return None
+            self._grasp_state.clear()
+            return []
 
-        lm = result.hand_landmarks[0]
-        pts = np.array([[p.x * W, p.y * H] for p in lm], dtype=np.float32)
+        hands: list[HandState] = []
+        seen: dict[str, bool] = {}
+        for i, lm in enumerate(result.hand_landmarks):
+            pts = np.array([[p.x * W, p.y * H] for p in lm], dtype=np.float32)
+            label = "?"
+            if result.handedness and i < len(result.handedness):
+                label = result.handedness[i][0].category_name
+            # Disambiguate if both hands share a label this frame.
+            if label in seen:
+                label = f"{label}{i}"
+            seen[label] = True
 
-        thumb, index = pts[self.THUMB_TIP], pts[self.INDEX_TIP]
-        # Normalize the pinch gap by hand size so it is scale invariant.
-        ref = np.linalg.norm(pts[self.WRIST] - pts[self.INDEX_MCP]) + 1e-6
-        gap = float(np.linalg.norm(thumb - index) / ref)
+            # Whole-hand grasp: fingertips fold toward the palm centre.
+            size = np.linalg.norm(pts[self.WRIST] - pts[self.PALM_REF]) + 1e-6
+            palm = pts[self.PALM_REF]
+            tip_dist = np.mean([np.linalg.norm(pts[t] - palm) for t in self.FINGERTIPS])
+            ratio = float(tip_dist / size)
 
-        # Hysteresis: easier to keep a pinch than to start one.
-        if self._pinching:
-            self._pinching = gap < self.pinch_off
-        else:
-            self._pinching = gap < self.pinch_on
+            prev = self._grasp_state.get(label, False)
+            grasping = ratio < self.grasp_off if prev else ratio < self.grasp_on
+            self._grasp_state[label] = grasping
 
-        mid = (thumb + index) / 2.0
-        return HandState(point=mid, pinching=self._pinching, landmarks_px=pts)
+            point = pts[list(self.PALM)].mean(axis=0)
+            hands.append(HandState(point=point, grasping=grasping,
+                                   landmarks_px=pts, label=label))
+
+        # Forget stale labels so hysteresis doesn't leak between appearances.
+        self._grasp_state = {h.label: self._grasp_state[h.label] for h in hands}
+        return hands
 
     def close(self) -> None:
         self._detector.close()

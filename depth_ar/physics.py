@@ -2,16 +2,16 @@
 
 Two modes, switched by ``enabled`` (SPACE in the demo):
 
-* **Gravity on** — a full 3D ballistic simulation. The cube is integrated with
+* **Gravity on** — a full 3D ballistic simulation. The ball is integrated with
   its current velocity (the hand's release vector, when thrown) plus gravity on
   the vertical axis, with *no* air drag, so it follows an accurate parabola. It
   bounces off real surfaces and the image floor (restitution) and loses
   tangential speed to ground friction, eventually coming to rest.
-* **Gravity off** — inertial float: the cube coasts on its velocity with air
-  drag and bounces around until it sleeps (used for zero-g throws / dragging).
+* **Gravity off** — no physics at all: the ball simply stays where it is (it is
+  only moved directly by the hand). Releasing it leaves it floating in place.
 
-Collision uses the monocular scene depth: a surface "supports" the cube where it
-sits at (or nearer than) the cube's own depth beneath it. The module only calls
+Collision uses the monocular scene depth: a surface "supports" the ball where it
+sits at (or nearer than) the ball's own depth beneath it. The module only calls
 ``renderer.render`` so it has no OpenCV/torch dependency and is headless-testable.
 """
 
@@ -31,7 +31,6 @@ class Physics:
         band_frac: float = 0.15,
         sleep_speed: float = 0.25,
         max_dt: float = 0.05,
-        linear_damping: float = 0.8,
         ground_friction: float = 0.6,
         tz_near: float = 0.6,
         tz_far: float = 12.0,
@@ -46,7 +45,6 @@ class Physics:
         self.band_frac = band_frac
         self.sleep_speed = sleep_speed
         self.max_dt = max_dt
-        self.linear_damping = linear_damping     # air drag (gravity-off float)
         self.ground_friction = ground_friction   # tangential loss on contact
         self.tz_near = tz_near
         self.tz_far = tz_far
@@ -68,14 +66,16 @@ class Physics:
         dt = float(np.clip(dt, 1e-4, self.max_dt))
         if self.enabled:
             return self._step_gravity(obj, renderer, scene_close, dt)
-        return self._step_inertia(obj, renderer, scene_close, dt)
+        # Gravity off: no physics at all — the ball stays exactly where it is.
+        obj.stop()
+        return renderer.render(obj)
 
     def _step_gravity(self, obj, renderer, scene_close, dt):
         """3D ballistic motion: initial velocity + gravity, with bouncing."""
         # Resting on a surface: stay put until the support disappears.
         if obj.on_ground:
             buf = renderer.render(obj)
-            if self._supported(buf, scene_close):
+            if self._supported(obj, buf, scene_close):
                 return buf
             obj.on_ground = False  # support gone -> resume falling
 
@@ -98,8 +98,8 @@ class Physics:
             self._resolve_landing(obj)
             return renderer.render(obj)
 
-        # Land on a real surface at the cube's depth (only when descending).
-        if obj.vy <= 0 and self._supported(buf, scene_close):
+        # Land on a real surface at the ball's depth (only when descending).
+        if obj.vy <= 0 and self._supported(obj, buf, scene_close):
             obj.ty = prev[1]
             self._resolve_landing(obj)
             return renderer.render(obj)
@@ -111,38 +111,6 @@ class Physics:
             obj.vy *= -self.restitution
             obj.vz *= -self.restitution
             return renderer.render(obj)
-
-        return buf
-
-    def _step_inertia(self, obj, renderer, scene_close, dt):
-        """Gravity-off throw: coast on velocity, drag, bounce, then sleep."""
-        obj.on_ground = False
-        speed2 = obj.vx ** 2 + obj.vy ** 2 + obj.vz ** 2
-        if speed2 < self.sleep_speed ** 2:
-            obj.stop()
-            return renderer.render(obj)
-
-        damp = max(0.0, 1.0 - self.linear_damping * dt)   # air drag
-        obj.vx *= damp
-        obj.vy *= damp
-        obj.vz *= damp
-
-        prev = (obj.tx, obj.ty, obj.tz)
-        obj.tx += obj.vx * dt
-        obj.ty += obj.vy * dt
-        obj.tz += obj.vz * dt
-        self._bounce_depth(obj)
-
-        buf = renderer.render(obj)
-        if self._bounce_borders(obj, renderer, bounce_bottom=True):
-            buf = renderer.render(obj)
-
-        if self._penetrating(buf, scene_close):
-            obj.tx, obj.ty, obj.tz = prev
-            obj.vx *= -self.restitution
-            obj.vy *= -self.restitution
-            obj.vz *= -self.restitution
-            buf = renderer.render(obj)
 
         return buf
 
@@ -215,8 +183,14 @@ class Physics:
         bottom_row = np.where(buf.mask.any(axis=1))[0].max()
         return bottom_row >= renderer.height - 1
 
-    def _supported(self, buf, scene_close) -> bool:
-        """True if a real surface lies at/nearer than the cube's bottom band."""
+    def _supported(self, obj, buf, scene_close) -> bool:
+        """True if a real surface sits at the ball's bottom depth beneath it.
+
+        The ball's lowest point shares the centre depth ``tz`` (moving down in
+        world Y does not change Z), so the supporting surface should be at
+        closeness ``k / tz``. Comparing against this single contact depth (rather
+        than each curved pixel's own depth) is what lets a sphere rest correctly.
+        """
         rows = np.where(buf.mask.any(axis=1))[0]
         if rows.size == 0:
             return False
@@ -227,5 +201,6 @@ class Physics:
         n = int(contact.sum())
         if n < self.min_contact_px:
             return False
-        support = scene_close[contact] >= (buf.close[contact] - self.margin)
+        ball_close = obj.scale_k / max(obj.tz, 1e-3)
+        support = scene_close[contact] >= (ball_close - self.margin)
         return float(support.mean()) >= self.contact_frac

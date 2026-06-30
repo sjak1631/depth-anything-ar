@@ -45,8 +45,8 @@ def composite(
     ----------
     frame : (H, W, 3) uint8 BGR camera frame.
     scene_close : (H, W) float32 in [0, 1] from :func:`normalize_depth`.
-    buffers : RenderBuffers from :class:`depth_ar.renderer.CubeRenderer`.
-    bias : nudge that biases the cube towards (positive) or against (negative)
+    buffers : RenderBuffers from :class:`depth_ar.renderer.SphereRenderer`.
+    bias : nudge that biases the ball towards (positive) or against (negative)
         being in front; useful to fight depth noise at contact edges.
     edge_feather : optional Gaussian feathering (px) of the visibility mask to
         soften occlusion boundaries. 0 disables it.

@@ -22,15 +22,16 @@ import cv2
 import numpy as np
 
 from depth_ar import (
-    CubeRenderer, Object3D, Physics, composite, normalize_depth, depth_to_color,
+    SphereRenderer, Object3D, Physics, composite, normalize_depth, depth_to_color,
     near_cube, grab_move,
 )
 
 HELP_LINES = [
     "WASD: move   Q/E: closer/farther   +/-: size",
-    "IJKL: rotate(pitch/yaw)   U/O: roll   [ ]: depth scale k",
-    "Pinch (thumb+index) to grab & move; release to throw (hand's velocity)",
-    "SPACE: gravity on (ballistic throw) / off (float)   V: depth   H: help   R: reset",
+    "[ ]: depth scale k",
+    "Close your whole hand over the ball to grab & move it",
+    "Gravity ON: release = ballistic throw.  Gravity OFF: it just stays put.",
+    "SPACE: gravity on/off   V: depth   H: help   R: reset   ESC: quit",
 ]
 
 
@@ -51,12 +52,11 @@ def parse_args():
     p.add_argument("--feather", type=int, default=1, help="edge feather radius in px (0=off)")
     p.add_argument("--gravity", type=float, default=3.5, help="gravity strength (world units/s^2)")
     p.add_argument("--restitution", type=float, default=0.4, help="bounciness 0..1 on collision")
-    p.add_argument("--damping", type=float, default=0.8,
-                   help="air drag for thrown cube (higher=stops sooner)")
     p.add_argument("--no-hands", action="store_true", help="disable MediaPipe hand grabbing")
-    p.add_argument("--max-hands", type=int, default=1, help="max hands to track")
-    p.add_argument("--pinch-on", type=float, default=0.45, help="pinch start threshold (smaller=tighter)")
-    p.add_argument("--pinch-off", type=float, default=0.7, help="pinch release threshold")
+    p.add_argument("--max-hands", type=int, default=2, help="max hands to track")
+    p.add_argument("--grasp-on", type=float, default=1.0,
+                   help="grasp (fist) start threshold; smaller = must close more")
+    p.add_argument("--grasp-off", type=float, default=1.3, help="grasp release threshold")
     p.add_argument("--no-depth-follow", action="store_true",
                    help="while grabbing, keep tz fixed instead of matching the hand's depth")
     return p.parse_args()
@@ -74,17 +74,17 @@ def open_capture(source: str, width: int, height: int) -> cv2.VideoCapture:
 
 
 def draw_hand(img, hand, grabbed):
-    """Draw landmarks and the pinch point (colour shows grab state)."""
+    """Draw landmarks and the palm point (colour shows grasp/grab state)."""
     for (x, y) in hand.landmarks_px:
         cv2.circle(img, (int(x), int(y)), 2, (200, 200, 200), -1, cv2.LINE_AA)
     px, py = int(hand.point[0]), int(hand.point[1])
     if grabbed:
-        color = (0, 255, 0)        # green: holding the cube
-    elif hand.pinching:
-        color = (0, 200, 255)      # orange: pinching but not on the cube
+        color = (0, 255, 0)        # green: holding the ball
+    elif hand.grasping:
+        color = (0, 200, 255)      # orange: closed fist but not on the ball
     else:
         color = (160, 160, 160)    # grey: open hand
-    cv2.circle(img, (px, py), 10, color, 2, cv2.LINE_AA)
+    cv2.circle(img, (px, py), 12, color, 2, cv2.LINE_AA)
 
 
 def draw_overlay(img, obj, fps, show_help, physics):
@@ -128,10 +128,9 @@ def main():
     )
     print(f"Depth model ready on: {estimator.device}")
 
-    renderer = CubeRenderer(W, H)
+    renderer = SphereRenderer(W, H)
     obj = Object3D()
-    physics = Physics(gravity=args.gravity, restitution=args.restitution,
-                      linear_damping=args.damping)
+    physics = Physics(gravity=args.gravity, restitution=args.restitution)
 
     tracker = None
     if not args.no_hands:
@@ -139,10 +138,10 @@ def main():
             from depth_ar.hand_tracker import HandTracker
             tracker = HandTracker(
                 max_hands=args.max_hands,
-                pinch_on=args.pinch_on,
-                pinch_off=args.pinch_off,
+                grasp_on=args.grasp_on,
+                grasp_off=args.grasp_off,
             )
-            print("Hand tracking enabled (pinch to grab the cube).")
+            print("Hand tracking enabled (close your hand over the ball to grab).")
         except Exception as exc:  # MediaPipe missing or failed to init.
             print(f"Hand tracking disabled ({exc}). Install mediapipe to enable.")
 
@@ -150,7 +149,8 @@ def main():
     show_help = True
     show_depth = False
     grabbed = False
-    prev_grab_pos = None        # last cube pos while grabbed (for throw velocity)
+    grab_label = None           # which hand (Left/Right) is holding the ball
+    prev_grab_pos = None        # last ball pos while grabbed (for throw velocity)
     frame_idx = 0
     last = time.time()
     fps = 0.0
@@ -177,49 +177,73 @@ def main():
             depth = estimator.infer(frame)
             scene_close = normalize_depth(depth, invert=args.invert_depth)
 
-        # Hand interaction: pinch near the cube to grab, then drag it around.
-        hand = tracker.process(frame) if tracker is not None else None
-        if hand is not None and hand.pinching:
-            if not grabbed and near_cube(renderer, obj, hand.point[0], hand.point[1]):
+        # Hand interaction: close your whole hand over the ball to grab it.
+        hands = tracker.process(frame) if tracker is not None else []
+
+        active = None
+        if grabbed:
+            # Continuity: keep the SAME hand as long as it is present and still
+            # closed. This is what makes two-handed scenes stable (no flicker
+            # between hands).
+            for h in hands:
+                if h.label == grab_label and h.grasping:
+                    active = h
+                    break
+            if active is None:
+                grabbed = False
+                grab_label = None
+                prev_grab_pos = None
+
+        if not grabbed:
+            # Start a grab with the closed hand nearest the ball.
+            cu, cv = renderer.project_point(obj.tx, obj.ty, obj.tz)
+            best_d = None
+            for h in hands:
+                if not h.grasping:
+                    continue
+                if not near_cube(renderer, obj, h.point[0], h.point[1]):
+                    continue
+                d = (cu - h.point[0]) ** 2 + (cv - h.point[1]) ** 2
+                if best_d is None or d < best_d:
+                    best_d, active = d, h
+            if active is not None:
                 grabbed = True
-            if grabbed:
-                # Probe depth from points that stay on the hand (not the gap
-                # between the fingers) so releasing the pinch can't fling the
-                # cube into the distance: thumb tip, index tip/MCP, middle MCP.
-                lm = hand.landmarks_px
-                depth_points = lm[[4, 8, 5, 9]]
-                grab_move(obj, renderer, hand.point[0], hand.point[1], scene_close,
-                          depth_follow=not args.no_depth_follow,
-                          depth_points=depth_points)
-                # Track hand velocity (EMA) so the cube can be thrown on release.
-                cur = np.array([obj.tx, obj.ty, obj.tz], dtype=np.float64)
-                if prev_grab_pos is None:
-                    obj.set_velocity(0.0, 0.0, 0.0)
-                else:
-                    inst = (cur - prev_grab_pos) / max(dt, 1e-3)
-                    a = 0.5
-                    obj.set_velocity(
-                        (1 - a) * obj.vx + a * inst[0],
-                        (1 - a) * obj.vy + a * inst[1],
-                        (1 - a) * obj.vz + a * inst[2],
-                    )
-                prev_grab_pos = cur
-        else:
-            grabbed = False
-            prev_grab_pos = None
+                grab_label = active.label
+                prev_grab_pos = None
+
+        if grabbed and active is not None:
+            # Probe depth from points on the palm/fingers (never the background)
+            # so releasing can't fling the ball away.
+            lm = active.landmarks_px
+            depth_points = lm[[0, 5, 9, 13, 17, 8, 12]]
+            grab_move(obj, renderer, active.point[0], active.point[1], scene_close,
+                      depth_follow=not args.no_depth_follow,
+                      depth_points=depth_points)
+            # Track hand velocity (EMA) so the ball can be thrown on release.
+            cur = np.array([obj.tx, obj.ty, obj.tz], dtype=np.float64)
+            if prev_grab_pos is None:
+                obj.set_velocity(0.0, 0.0, 0.0)
+            else:
+                inst = (cur - prev_grab_pos) / max(dt, 1e-3)
+                a = 0.5
+                obj.set_velocity(
+                    (1 - a) * obj.vx + a * inst[0],
+                    (1 - a) * obj.vy + a * inst[1],
+                    (1 - a) * obj.vz + a * inst[2],
+                )
+            prev_grab_pos = cur
 
         if grabbed:
-            # Held by the hand: position is set directly, physics paused. The
-            # velocity tracked above is what gets thrown when the pinch releases.
+            # Held by the hand: position is set directly, physics paused.
             buffers = renderer.render(obj)
         else:
-            # Gravity on -> fall/land; gravity off -> coast on throw velocity.
+            # Gravity on -> ballistic motion; gravity off -> stays put.
             buffers = physics.step(obj, renderer, scene_close, dt)
         out = composite(frame, scene_close, buffers,
                         bias=args.bias, edge_feather=args.feather)
 
-        if hand is not None:
-            draw_hand(out, hand, grabbed)
+        for h in hands:
+            draw_hand(out, h, grabbed and h.label == grab_label)
 
         if show_depth:
             dvis = depth_to_color(scene_close)
