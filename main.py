@@ -179,8 +179,14 @@ def main():
             if not grabbed and near_cube(renderer, obj, hand.point[0], hand.point[1]):
                 grabbed = True
             if grabbed:
+                # Probe depth from points that stay on the hand (not the gap
+                # between the fingers) so releasing the pinch can't fling the
+                # cube into the distance: thumb tip, index tip/MCP, middle MCP.
+                lm = hand.landmarks_px
+                depth_points = lm[[4, 8, 5, 9]]
                 grab_move(obj, renderer, hand.point[0], hand.point[1], scene_close,
-                          depth_follow=not args.no_depth_follow)
+                          depth_follow=not args.no_depth_follow,
+                          depth_points=depth_points)
         else:
             grabbed = False
 

@@ -4,7 +4,7 @@ from .renderer import CubeRenderer, RenderBuffers
 from .object3d import Object3D
 from .compositor import composite, normalize_depth, depth_to_color
 from .physics import Physics
-from .interaction import sample_close, near_cube, grab_move
+from .interaction import sample_close, sample_close_nearest, near_cube, grab_move
 
 __all__ = [
     "CubeRenderer",
@@ -15,6 +15,7 @@ __all__ = [
     "normalize_depth",
     "depth_to_color",
     "sample_close",
+    "sample_close_nearest",
     "near_cube",
     "grab_move",
 ]

@@ -1,4 +1,4 @@
-"""MediaPipe hand tracking + pinch detection (optional dependency).
+"""MediaPipe hand tracking + pinch detection (MediaPipe Tasks API, >=0.10).
 
 Isolated here so the rest of the package imports without MediaPipe installed.
 ``process`` returns a :class:`HandState` (pinch midpoint in pixels, a pinch
@@ -8,14 +8,24 @@ hand is visible.
 
 from __future__ import annotations
 
+import os
+import urllib.request
 from dataclasses import dataclass
 
 import numpy as np
 
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
+)
+_MODEL_PATH = os.path.join(
+    os.path.expanduser("~"), ".cache", "mediapipe", "hand_landmarker.task"
+)
+
 
 @dataclass
 class HandState:
-    point: np.ndarray        # (2,) pixel of the thumb-index midpoint
+    point: np.ndarray         # (2,) pixel of the thumb-index midpoint
     pinching: bool
     landmarks_px: np.ndarray  # (21, 2) pixel landmark coordinates
 
@@ -35,29 +45,45 @@ class HandTracker:
         pinch_off: float = 0.7,
     ):
         import mediapipe as mp
+        from mediapipe.tasks.python import BaseOptions
+        from mediapipe.tasks.python.vision import (
+            HandLandmarker,
+            HandLandmarkerOptions,
+            RunningMode,
+        )
 
-        self._hands = mp.solutions.hands.Hands(
-            model_complexity=0,
-            max_num_hands=max_hands,
-            min_detection_confidence=det_conf,
+        if not os.path.exists(_MODEL_PATH):
+            os.makedirs(os.path.dirname(_MODEL_PATH), exist_ok=True)
+            print(f"Downloading hand landmark model to {_MODEL_PATH} ...")
+            urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+
+        options = HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=_MODEL_PATH),
+            running_mode=RunningMode.IMAGE,
+            num_hands=max_hands,
+            min_hand_detection_confidence=det_conf,
+            min_hand_presence_confidence=0.5,
             min_tracking_confidence=track_conf,
         )
+        self._detector = HandLandmarker.create_from_options(options)
         self.pinch_on = pinch_on
         self.pinch_off = pinch_off
         self._pinching = False
 
     def process(self, frame_bgr) -> "HandState | None":
         import cv2
+        import mediapipe as mp
 
         H, W = frame_bgr.shape[:2]
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        rgb.flags.writeable = False
-        res = self._hands.process(rgb)
-        if not res.multi_hand_landmarks:
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = self._detector.detect(mp_image)
+
+        if not result.hand_landmarks:
             self._pinching = False
             return None
 
-        lm = res.multi_hand_landmarks[0].landmark
+        lm = result.hand_landmarks[0]
         pts = np.array([[p.x * W, p.y * H] for p in lm], dtype=np.float32)
 
         thumb, index = pts[self.THUMB_TIP], pts[self.INDEX_TIP]
@@ -75,4 +101,4 @@ class HandTracker:
         return HandState(point=mid, pinching=self._pinching, landmarks_px=pts)
 
     def close(self) -> None:
-        self._hands.close()
+        self._detector.close()

@@ -173,6 +173,35 @@ def interaction_checks(W, H):
         f"depth-follow tz {obj2.tz:.2f} != expected {expected_tz:.2f}"
     print(f"[ok] grab_move: cube follows hand, tz->{obj2.tz:.2f} (depth matched)")
 
+    # 11) Release regression: the midpoint sees far background (through the gap
+    #     between the fingers) but the hand landmarks are on a near surface.
+    #     The cube must NOT fly into the distance.
+    from depth_ar import sample_close_nearest
+
+    scene_bg = np.full((H, W), 0.04, np.float32)   # far background everywhere
+    cx, cy = W * 0.5, H * 0.5
+    # A near "hand" blob; the midpoint sits in a far hole between the fingers.
+    scene_bg[int(cy) - 25: int(cy) + 25, int(cx) - 40: int(cx) - 10] = 0.9
+    scene_bg[int(cy) - 25: int(cy) + 25, int(cx) + 10: int(cx) + 40] = 0.9
+    depth_points = np.array([[cx - 25, cy], [cx + 25, cy],
+                             [cx - 30, cy + 10], [cx + 30, cy + 10]], np.float32)
+
+    obj3 = Object3D(tx=0.0, ty=0.0, tz=3.0, scale_k=3.0, size=0.5)
+    near_close = sample_close_nearest(scene_bg, depth_points)
+    assert near_close > 0.5, "nearest sampling should latch onto the hand, not the gap"
+    for _ in range(60):
+        grab_move(obj3, renderer, cx, cy, scene_bg, depth_follow=True,
+                  depth_points=depth_points)
+    assert obj3.tz < 6.0, f"cube flew into the distance on release (tz={obj3.tz:.1f})"
+    print(f"[ok] release stays stable: tz held at {obj3.tz:.2f} (no fly-away)")
+
+    # 12) Slew limit: a single bad sample cannot teleport the cube far.
+    obj4 = Object3D(tz=3.0, scale_k=3.0)
+    far = np.full((H, W), 0.04, np.float32)
+    grab_move(obj4, renderer, cx, cy, far, depth_follow=True)  # one bad frame
+    assert obj4.tz - 3.0 <= 0.4 + 1e-6, f"tz jumped past the slew limit ({obj4.tz:.2f})"
+    print(f"[ok] slew limit: one bad frame moves tz only to {obj4.tz:.2f}")
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

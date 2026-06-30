@@ -98,6 +98,13 @@ depth follows the real surface under your hand (`tz = k / scene_close`), so it
 tracks your hand in 3D and stays consistent with occlusion. Release the pinch to
 drop it — if gravity is on (`SPACE`), it falls from where you let go.
 
+Depth-follow is made robust against a classic failure: when you open your
+fingers to release, the thumb-index midpoint slides into the gap and the camera
+sees the far background, which would otherwise spike `tz = k / scene_close` and
+fling the cube into the distance. To prevent this, depth is sampled from the
+*nearest* of several hand landmarks (so the foreground hand wins over the
+background), and the per-frame depth change is slew-limited.
+
 Flags: `--no-hands` (disable), `--max-hands N`, `--pinch-on` / `--pinch-off`
 (pinch sensitivity, normalized by hand size), `--no-depth-follow` (keep `tz`
 fixed while dragging instead of matching the hand's depth).

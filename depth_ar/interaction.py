@@ -26,6 +26,16 @@ def sample_close(scene_close: np.ndarray, px: float, py: float, win: int = 7) ->
     return float(np.median(patch))
 
 
+def sample_close_nearest(scene_close: np.ndarray, points, win: int = 7) -> float:
+    """Closeness of the *nearest* surface among several probe points.
+
+    The hand is the foreground, so taking the maximum closeness over hand
+    landmarks rejects the far background that shows through the gap between the
+    fingers as a pinch is released (the cause of the cube flying away)."""
+    vals = [sample_close(scene_close, p[0], p[1], win) for p in points]
+    return max(vals) if vals else 0.0
+
+
 def near_cube(renderer, obj, px: float, py: float, extra_px: float = 30.0) -> bool:
     """True if (px, py) is close to the cube's projected centre."""
     cu, cv = renderer.project_point(obj.tx, obj.ty, obj.tz)
@@ -42,19 +52,32 @@ def grab_move(
     scene_close: np.ndarray,
     depth_follow: bool = True,
     smooth: float = 0.5,
-    eps: float = 0.05,
-    tz_range=(0.3, 50.0),
+    eps: float = 0.12,
+    tz_range=(0.3, 15.0),
+    depth_points=None,
+    max_tz_step: float = 0.4,
 ) -> None:
     """Move the cube so it tracks the hand point (px, py).
 
     With ``depth_follow`` the cube's depth is matched to the real surface under
     the hand: ``k / tz = scene_close`` -> ``tz = k / scene_close`` (EMA-smoothed).
     Then x/y are unprojected from the screen point at that depth.
+
+    To avoid the cube flying into the distance when a pinch is released, depth is
+    sampled from the *nearest* of several hand landmarks (``depth_points``) rather
+    than the thumb-index midpoint, and the per-frame depth change is slew-limited
+    by ``max_tz_step``.
     """
     if depth_follow:
-        close = max(sample_close(scene_close, px, py), eps)
+        if depth_points is not None and len(depth_points) > 0:
+            close = sample_close_nearest(scene_close, depth_points)
+        else:
+            close = sample_close(scene_close, px, py)
+        close = max(close, eps)
         tz_target = float(np.clip(obj.scale_k / close, tz_range[0], tz_range[1]))
-        obj.tz += smooth * (tz_target - obj.tz)
+        delta = smooth * (tz_target - obj.tz)
+        delta = float(np.clip(delta, -max_tz_step, max_tz_step))  # slew limit
+        obj.tz += delta
 
     obj.tx, obj.ty = renderer.unproject(px, py, obj.tz)
     # Held by the hand: cancel any physics motion.
