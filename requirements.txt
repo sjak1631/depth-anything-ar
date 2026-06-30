@@ -1,0 +1,8 @@
+# Core runtime (run on your local PC with a webcam).
+# For CUDA, install the matching torch build from https://pytorch.org first, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1
+transformers>=4.45
+opencv-python>=4.8
+numpy>=1.24
+pillow>=10.0
