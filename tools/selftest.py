@@ -263,6 +263,26 @@ def interaction_checks(W, H):
     assert obj4.tz - 3.0 <= 0.4 + 1e-6, f"tz jumped past the slew limit ({obj4.tz:.2f})"
     print(f"[ok] slew limit: one bad frame moves tz only to {obj4.tz:.2f}")
 
+    # 13) Throw velocity: the moving average over the window survives a slow
+    #     last sample (hand decelerating as it opens) and drops stale samples.
+    from depth_ar import VelocityTracker
+
+    vt = VelocityTracker(window=0.15)
+    t = 0.0
+    for _ in range(10):                 # steady fast swing
+        t += 1 / 60
+        vt.add(t, [2.0, 0.0, 0.0])
+    t += 1 / 60
+    vt.add(t, [0.1, 0.0, 0.0])          # one slow sample at the moment of release
+    avg = vt.average()
+    assert avg[0] > 1.5, f"moving average collapsed on a slow last sample ({avg[0]:.2f})"
+
+    vt2 = VelocityTracker(window=0.1)
+    vt2.add(0.0, [5.0, 0.0, 0.0])
+    vt2.add(1.0, [1.0, 0.0, 0.0])       # the 5.0 sample is now outside the window
+    assert abs(vt2.average()[0] - 1.0) < 1e-9, "stale samples must be dropped"
+    print(f"[ok] throw velocity: moving average robust to lag/decel (avg={avg[0]:.2f})")
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

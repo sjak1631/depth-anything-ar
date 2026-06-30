@@ -23,7 +23,7 @@ import numpy as np
 
 from depth_ar import (
     SphereRenderer, Object3D, Physics, composite, normalize_depth, depth_to_color,
-    near_cube, grab_move, sample_close, screen_velocity_to_world,
+    near_cube, grab_move, sample_close, screen_velocity_to_world, VelocityTracker,
 )
 
 HELP_LINES = [
@@ -59,6 +59,8 @@ def parse_args():
     p.add_argument("--grasp-off", type=float, default=1.3, help="grasp release threshold")
     p.add_argument("--no-depth-follow", action="store_true",
                    help="while grabbing, keep tz fixed instead of matching the hand's depth")
+    p.add_argument("--throw-window", type=float, default=0.15,
+                   help="seconds of velocity history averaged into the throw speed")
     p.add_argument("--no-feet", action="store_true",
                    help="disable MediaPipe pose / foot kicking")
     p.add_argument("--kick-speed", type=float, default=1.5,
@@ -177,6 +179,7 @@ def main():
     grabbed = False
     grab_label = None           # which hand (Left/Right) is holding the ball
     prev_grab_pos = None        # last ball pos while grabbed (for throw velocity)
+    throw_vel = VelocityTracker(window=args.throw_window)
     prev_feet = {}              # label -> last toe pixel (for foot velocity)
     kick_cooldown = 0.0         # seconds until another kick is allowed
     frame_idx = 0
@@ -218,6 +221,11 @@ def main():
                     active = h
                     break
             if active is None:
+                # Released: throw with the moving-average velocity over the last
+                # throw-window seconds (robust to lag / the hand slowing as it
+                # opens), so the ball leaves the hand with natural inertia.
+                obj.set_velocity(*throw_vel.average())
+                obj.on_ground = False
                 grabbed = False
                 grab_label = None
                 prev_grab_pos = None
@@ -238,6 +246,7 @@ def main():
                 grabbed = True
                 grab_label = active.label
                 prev_grab_pos = None
+                throw_vel.reset()
 
         if grabbed and active is not None:
             # Probe depth from points on the palm/fingers (never the background)
@@ -247,18 +256,11 @@ def main():
             grab_move(obj, renderer, active.point[0], active.point[1], scene_close,
                       depth_follow=not args.no_depth_follow,
                       depth_points=depth_points)
-            # Track hand velocity (EMA) so the ball can be thrown on release.
+            # Continuously record the ball's velocity while held; the throw uses
+            # the moving average of this history at release.
             cur = np.array([obj.tx, obj.ty, obj.tz], dtype=np.float64)
-            if prev_grab_pos is None:
-                obj.set_velocity(0.0, 0.0, 0.0)
-            else:
-                inst = (cur - prev_grab_pos) / max(dt, 1e-3)
-                a = 0.5
-                obj.set_velocity(
-                    (1 - a) * obj.vx + a * inst[0],
-                    (1 - a) * obj.vy + a * inst[1],
-                    (1 - a) * obj.vz + a * inst[2],
-                )
+            if prev_grab_pos is not None:
+                throw_vel.add(now, (cur - prev_grab_pos) / max(dt, 1e-3))
             prev_grab_pos = cur
 
         # Foot interaction: kick the ball. A kick imparts velocity, so it only

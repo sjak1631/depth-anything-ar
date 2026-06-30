@@ -14,6 +14,33 @@ from __future__ import annotations
 import numpy as np
 
 
+class VelocityTracker:
+    """Rolling history of velocity samples, averaged over a short time window.
+
+    Used so a *throw* uses the moving average of the hand's velocity over the
+    last ``window`` seconds, not the single (possibly laggy or decelerating)
+    sample at the instant of release. This makes throws robust to frame hitches
+    and to the hand slowing as it opens, giving a natural inertial release.
+    """
+
+    def __init__(self, window: float = 0.15):
+        self.window = window
+        self._buf: list[tuple[float, np.ndarray]] = []
+
+    def reset(self) -> None:
+        self._buf.clear()
+
+    def add(self, t: float, vel) -> None:
+        self._buf.append((t, np.asarray(vel, dtype=np.float64)))
+        cutoff = t - self.window
+        self._buf = [(tt, v) for tt, v in self._buf if tt >= cutoff]
+
+    def average(self) -> np.ndarray:
+        if not self._buf:
+            return np.zeros(3)
+        return np.mean([v for _, v in self._buf], axis=0)
+
+
 def sample_close(scene_close: np.ndarray, px: float, py: float, win: int = 7) -> float:
     """Median scene closeness in a small window around a pixel."""
     H, W = scene_close.shape

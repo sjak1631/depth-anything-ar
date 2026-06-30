@@ -90,7 +90,10 @@ won't make the ball jump between hands.
 - **Gravity ON** — releasing throws the ball with your hand's velocity as the
   initial vector of a full 3D **ballistic simulation**: it arcs under gravity (no
   air drag, an accurate parabola), bounces off real surfaces and the floor
-  (`--restitution`), loses sideways speed to ground friction, and settles.
+  (`--restitution`), loses sideways speed to ground friction, and settles. The
+  throw velocity is the **moving average** of the hand's velocity over the last
+  `--throw-window` seconds (not the single instant of release), so it stays
+  natural despite frame lag or the hand slowing as it opens.
 - **Gravity OFF** — **no physics at all.** The ball is only moved directly by
   your hand; release it and it simply stays where you left it (floating in
   place).
