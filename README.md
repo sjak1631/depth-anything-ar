@@ -99,10 +99,13 @@ depth follows the real surface under your hand (`tz = k / scene_close`), so it
 tracks your hand in 3D and stays consistent with occlusion.
 
 **Throwing:** the cube keeps the velocity of your hand when you release the
-pinch. With gravity **off**, it floats off in that direction (zero-g), slows down
-from air drag (`--damping`), and bounces off the screen edges and real objects
-until it comes to rest. With gravity **on**, releasing instead drops it (a
-vertical toss/fall) from where you let go.
+pinch. With gravity **on**, that release vector becomes the initial velocity of a
+full 3D **ballistic simulation** — the cube arcs under gravity (no air drag, so
+it's an accurate parabola), bounces off real surfaces and the floor with
+`--restitution`, loses sideways speed to ground friction, and settles. With
+gravity **off**, it instead floats off in that direction (zero-g), slowed only by
+air drag (`--damping`). Either way it bounces off the screen edges so it can't be
+lost.
 
 Depth-follow is made robust against a classic failure: when you open your
 fingers to release, the thumb-index midpoint slides into the gap and the camera

@@ -170,6 +170,32 @@ def physics_checks(W, H):
     assert inside, "thrown cube escaped the frame instead of bouncing"
     print("[ok] throw bounce: fast throw stays on screen (border reflection)")
 
+    # 10) Ballistic throw with gravity ON: the release vector is the initial
+    #     velocity, then gravity makes a parabola (up first, then down) while
+    #     moving sideways. It must stay on screen and not ignore vx.
+    obj6 = Object3D(tx=-1.0, ty=0.2, tz=4.0, size=0.4)
+    obj6.set_velocity(2.0, 1.2, 0.0)   # throw to the right and upward
+    phys6 = Physics(gravity=4.0)
+    phys6.enabled = True
+    x_start, y_start = obj6.tx, obj6.ty
+    y_max = y_start
+    x_max = x_start
+    on_screen = True
+    for _ in range(500):
+        phys6.step(obj6, renderer, empty, dt)
+        y_max = max(y_max, obj6.ty)
+        x_max = max(x_max, obj6.tx)
+        cu, cv = renderer.project_point(obj6.tx, obj6.ty, obj6.tz)
+        if cu < -1 or cu > W + 1 or cv < -1 or cv > H + 1:
+            on_screen = False
+            break
+    assert x_max > x_start + 0.2, "ballistic throw ignored horizontal velocity (vx)"
+    assert y_max > y_start + 0.05, "thrown-up cube should rise before falling (parabola)"
+    assert obj6.ty < y_start, "gravity should bring the cube back down below the start"
+    assert on_screen, "ballistic throw escaped the frame"
+    print(f"[ok] ballistic throw (gravity on): arced right to x={x_max:.2f}, "
+          f"peaked at y={y_max:.2f}, fell to y={obj6.ty:.2f}")
+
 
 def interaction_checks(W, H):
     from depth_ar import near_cube, grab_move

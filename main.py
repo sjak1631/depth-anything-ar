@@ -29,8 +29,8 @@ from depth_ar import (
 HELP_LINES = [
     "WASD: move   Q/E: closer/farther   +/-: size",
     "IJKL: rotate(pitch/yaw)   U/O: roll   [ ]: depth scale k",
-    "Pinch (thumb+index) to grab & move; release to throw (gravity off = float)",
-    "SPACE: gravity on/off   V: depth view   H: help   R: reset   ESC: quit",
+    "Pinch (thumb+index) to grab & move; release to throw (hand's velocity)",
+    "SPACE: gravity on (ballistic throw) / off (float)   V: depth   H: help   R: reset",
 ]
 
 
