@@ -24,6 +24,10 @@ class Object3D:
     size: float = 0.6          # half edge length in world units
     scale_k: float = 3.0       # manual depth scale (k in close = k / Z)
 
+    # Physics state (used when gravity is enabled).
+    vy: float = 0.0            # vertical velocity in world units / s
+    on_ground: bool = False    # resting on a supporting surface
+
     # Step sizes.
     move_step: float = 0.08
     depth_step: float = 0.12
@@ -45,6 +49,8 @@ class Object3D:
     def reset(self) -> None:
         for k, v in self._defaults.items():
             setattr(self, k, v)
+        self.vy = 0.0
+        self.on_ground = False
 
     def handle_key(self, key: int) -> bool:
         """Apply a key press (lowercased ASCII code from cv2.waitKey).
@@ -93,6 +99,9 @@ class Object3D:
             self.scale_k = max(0.05, self.scale_k - self.k_step)
         elif ch == "r":
             self.reset()
+            return True
         else:
             return False
+        # Any manual manipulation wakes a resting object so gravity re-applies.
+        self.on_ground = False
         return True

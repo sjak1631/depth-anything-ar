@@ -29,8 +29,14 @@ class DepthEstimator:
         self.fp16 = bool(fp16) and device == "cuda"
         self.infer_size = int(infer_size)
 
-        self.processor = AutoImageProcessor.from_pretrained(model_name)
-        model = AutoModelForDepthEstimation.from_pretrained(model_name)
+        def _load(cls, **kw):
+            try:
+                return cls.from_pretrained(model_name, local_files_only=True, **kw)
+            except Exception:
+                return cls.from_pretrained(model_name, **kw)
+
+        self.processor = _load(AutoImageProcessor)
+        model = _load(AutoModelForDepthEstimation)
         model = model.to(device).eval()
         if self.fp16:
             model = model.half()

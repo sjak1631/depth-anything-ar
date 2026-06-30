@@ -76,8 +76,66 @@ def main() -> int:
     write_ppm(os.path.join(out_dir, "selftest_far.ppm"), out_far)
     write_ppm(os.path.join(out_dir, "selftest_split.ppm"), out_split)
     print(f"[ok] previews written to {os.path.abspath(out_dir)}")
+
+    physics_checks(W, H)
+
     print("ALL CHECKS PASSED")
     return 0
+
+
+def _bottom_row(buf):
+    rows = np.where(buf.mask.any(axis=1))[0]
+    return int(rows.max()) if rows.size else -1
+
+
+def physics_checks(W, H):
+    from depth_ar import Physics
+
+    renderer = CubeRenderer(W, H)
+    dt = 1.0 / 60.0
+
+    # 5) Cube rests on a real surface at its own depth (a "shelf").
+    shelf = np.zeros((H, W), np.float32)
+    shelf[H // 2: H // 2 + 60, :] = 1.0    # near surface across the lower-middle
+    obj = Object3D(ty=1.4, tz=3.0, scale_k=3.0, size=0.5)
+    phys = Physics(gravity=3.5)
+    phys.enabled = True
+
+    landed = False
+    max_bottom = 0
+    for _ in range(600):
+        buf = phys.step(obj, renderer, shelf, dt)
+        max_bottom = max(max_bottom, _bottom_row(buf))
+        if obj.on_ground:
+            landed = True
+            break
+    assert landed, "cube never came to rest on the shelf"
+    rest_bottom = _bottom_row(renderer.render(obj))
+    assert rest_bottom < H - 5, f"cube fell through to the floor ({rest_bottom})"
+    print(f"[ok] gravity: cube rested on shelf at bottom row {rest_bottom} (< {H})")
+
+    # 6) With no supporting surface the cube falls but never leaves the frame.
+    empty = np.zeros((H, W), np.float32)
+    obj2 = Object3D(ty=1.4, tz=3.0, scale_k=3.0, size=0.5)
+    phys2 = Physics(gravity=3.5)
+    phys2.enabled = True
+    worst = 0
+    for _ in range(600):
+        buf = phys2.step(obj2, renderer, empty, dt)
+        worst = max(worst, _bottom_row(buf))
+    assert worst <= H - 1, f"cube escaped below the frame (row {worst})"
+    final_bottom = _bottom_row(renderer.render(obj2))
+    assert final_bottom > 0.6 * H, f"cube did not fall toward the floor ({final_bottom})"
+    print(f"[ok] gravity: free fall stopped at image floor (bottom row {final_bottom})")
+
+    # 7) Physics off -> the cube does not move under gravity.
+    obj3 = Object3D(ty=1.0)
+    phys3 = Physics()  # disabled by default
+    y0 = obj3.ty
+    for _ in range(120):
+        phys3.step(obj3, renderer, empty, dt)
+    assert obj3.ty == y0, "object moved while physics was disabled"
+    print("[ok] gravity off: object stays put until SPACE is pressed")
 
 
 if __name__ == "__main__":

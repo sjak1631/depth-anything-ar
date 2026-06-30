@@ -21,12 +21,14 @@ import time
 import cv2
 import numpy as np
 
-from depth_ar import CubeRenderer, Object3D, composite, normalize_depth, depth_to_color
+from depth_ar import (
+    CubeRenderer, Object3D, Physics, composite, normalize_depth, depth_to_color,
+)
 
 HELP_LINES = [
     "WASD: move   Q/E: closer/farther   +/-: size",
     "IJKL: rotate(pitch/yaw)   U/O: roll   [ ]: depth scale k",
-    "V: depth view   H: help   R: reset   ESC/Ctrl-C: quit",
+    "SPACE: gravity on/off   V: depth view   H: help   R: reset   ESC: quit",
 ]
 
 
@@ -45,6 +47,8 @@ def parse_args():
                    help="set if model outputs larger=farther (metric models)")
     p.add_argument("--bias", type=float, default=0.0, help="occlusion bias (-1..1)")
     p.add_argument("--feather", type=int, default=1, help="edge feather radius in px (0=off)")
+    p.add_argument("--gravity", type=float, default=3.5, help="gravity strength (world units/s^2)")
+    p.add_argument("--restitution", type=float, default=0.4, help="bounciness 0..1 on collision")
     return p.parse_args()
 
 
@@ -52,14 +56,20 @@ def open_capture(source: str, width: int, height: int) -> cv2.VideoCapture:
     cap = cv2.VideoCapture(int(source) if source.isdigit() else source)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video source: {source}")
+    # Prefer MJPEG to avoid raw YUYV being misread as BGR (causes green frames).
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     return cap
 
 
-def draw_overlay(img, obj, fps, show_help):
+def draw_overlay(img, obj, fps, show_help, physics):
+    phys = "ON" if physics.enabled else "off"
+    if physics.enabled and obj.on_ground:
+        phys = "RESTING"
     lines = [
-        f"fps {fps:4.1f}  tz {obj.tz:4.2f}  k {obj.scale_k:4.2f}  size {obj.size:4.2f}",
+        f"fps {fps:4.1f}  tz {obj.tz:4.2f}  k {obj.scale_k:4.2f}  "
+        f"size {obj.size:4.2f}  gravity {phys}",
     ]
     if show_help:
         lines += HELP_LINES
@@ -96,6 +106,7 @@ def main():
 
     renderer = CubeRenderer(W, H)
     obj = Object3D()
+    physics = Physics(gravity=args.gravity, restitution=args.restitution)
 
     scene_close = np.zeros((H, W), dtype=np.float32)
     show_help = True
@@ -117,11 +128,17 @@ def main():
         if frame.shape[:2] != (H, W):
             frame = cv2.resize(frame, (W, H))
 
+        now = time.time()
+        dt = now - last
+        last = now
+        fps = 0.9 * fps + 0.1 * (1.0 / max(dt, 1e-6))
+
         if frame_idx % max(1, args.depth_interval) == 0:
             depth = estimator.infer(frame)
             scene_close = normalize_depth(depth, invert=args.invert_depth)
 
-        buffers = renderer.render(obj)
+        # Advance gravity/collision (renders the cube; no-op physics when off).
+        buffers = physics.step(obj, renderer, scene_close, dt)
         out = composite(frame, scene_close, buffers,
                         bias=args.bias, edge_feather=args.feather)
 
@@ -129,10 +146,7 @@ def main():
             dvis = depth_to_color(scene_close)
             out = cv2.addWeighted(out, 0.6, dvis, 0.4, 0)
 
-        now = time.time()
-        fps = 0.9 * fps + 0.1 * (1.0 / max(now - last, 1e-6))
-        last = now
-        draw_overlay(out, obj, fps, show_help)
+        draw_overlay(out, obj, fps, show_help, physics)
 
         cv2.imshow(win, out)
         key = cv2.waitKey(1) & 0xFF
@@ -142,6 +156,11 @@ def main():
             show_help = not show_help
         elif key == ord("v"):
             show_depth = not show_depth
+        elif key == ord(" "):
+            physics.toggle()
+        elif key == ord("r"):
+            obj.handle_key(key)
+            physics.reset()
         else:
             obj.handle_key(key)
 

@@ -64,14 +64,29 @@ Useful flags: `--no-fp16` (disable half precision), `--no-mirror`,
 | `U` / `O` | roll |
 | `+` / `-` | grow / shrink the cube |
 | `[` / `]` | decrease / increase depth scale `k` (occlusion alignment) |
+| `SPACE` | toggle gravity — drop the cube; it collides with real objects |
 | `V` | toggle depth-map overlay |
 | `H` | toggle help overlay |
-| `R` | reset the object |
+| `R` | reset the object (also turns gravity off) |
 | `ESC` | quit |
 
 **Tuning tip:** if the cube is wrongly occluded (or never occluded), nudge `k`
 with `[` / `]` until objects pass in front of / behind it correctly, then move
 it with `Q`/`E`.
+
+## Gravity & collision (SPACE)
+
+Press `SPACE` to toggle gravity. While on, the cube falls and **collides with
+the real scene using depth**: at each step the depth of the surface directly
+beneath the cube's bottom is compared with the cube's own depth. If a real
+surface sits at (or nearer than) the cube's depth, the cube lands and rests on
+it (with a small bounce, `--restitution`); otherwise it keeps falling, and the
+bottom of the image acts as a floor. Moving the cube (`WASD`/`QE`) or `R` wakes
+it so it can fall again.
+
+So the cube only lands on things at its own depth — line the cube up with a real
+surface (tune `tz` with `Q`/`E` and `k` with `[`/`]`) and it will sit on top of
+it. Tune the feel with `--gravity` and `--restitution`.
 
 ## Project layout
 
@@ -82,6 +97,7 @@ depth_ar/
   renderer.py               # solid 3D cube rasterizer (numpy, perspective + z-buffer)
   object3d.py               # object pose/state + keyboard mapping
   compositor.py             # depth normalize + occlusion compositing
+  physics.py                # depth-aware gravity + collision (SPACE)
 tools/selftest.py           # offline numpy-only check (no camera/torch needed)
 ```
 
