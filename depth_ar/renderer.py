@@ -79,6 +79,19 @@ class CubeRenderer:
         # Focal length in pixels from horizontal field of view.
         self.f = 0.5 * self.width / math.tan(math.radians(fov_deg) / 2.0)
 
+    def project_point(self, x: float, y: float, z: float):
+        """Camera-space point -> pixel (u, v). +Y is up, so v is flipped."""
+        z = max(float(z), 1e-3)
+        u = self.cx + self.f * x / z
+        v = self.cy - self.f * y / z
+        return u, v
+
+    def unproject(self, u: float, v: float, z: float):
+        """Pixel (u, v) at depth z -> camera-space (x, y)."""
+        x = (u - self.cx) * z / self.f
+        y = -(v - self.cy) * z / self.f
+        return x, y
+
     def render(self, obj) -> RenderBuffers:
         """Render ``obj`` (a :class:`depth_ar.object3d.Object3D`)."""
         H, W = self.height, self.width

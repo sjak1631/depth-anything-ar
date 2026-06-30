@@ -23,11 +23,13 @@ import numpy as np
 
 from depth_ar import (
     CubeRenderer, Object3D, Physics, composite, normalize_depth, depth_to_color,
+    near_cube, grab_move,
 )
 
 HELP_LINES = [
     "WASD: move   Q/E: closer/farther   +/-: size",
     "IJKL: rotate(pitch/yaw)   U/O: roll   [ ]: depth scale k",
+    "Pinch (thumb+index) to grab & move the cube with your hand",
     "SPACE: gravity on/off   V: depth view   H: help   R: reset   ESC: quit",
 ]
 
@@ -49,6 +51,12 @@ def parse_args():
     p.add_argument("--feather", type=int, default=1, help="edge feather radius in px (0=off)")
     p.add_argument("--gravity", type=float, default=3.5, help="gravity strength (world units/s^2)")
     p.add_argument("--restitution", type=float, default=0.4, help="bounciness 0..1 on collision")
+    p.add_argument("--no-hands", action="store_true", help="disable MediaPipe hand grabbing")
+    p.add_argument("--max-hands", type=int, default=1, help="max hands to track")
+    p.add_argument("--pinch-on", type=float, default=0.45, help="pinch start threshold (smaller=tighter)")
+    p.add_argument("--pinch-off", type=float, default=0.7, help="pinch release threshold")
+    p.add_argument("--no-depth-follow", action="store_true",
+                   help="while grabbing, keep tz fixed instead of matching the hand's depth")
     return p.parse_args()
 
 
@@ -61,6 +69,20 @@ def open_capture(source: str, width: int, height: int) -> cv2.VideoCapture:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     return cap
+
+
+def draw_hand(img, hand, grabbed):
+    """Draw landmarks and the pinch point (colour shows grab state)."""
+    for (x, y) in hand.landmarks_px:
+        cv2.circle(img, (int(x), int(y)), 2, (200, 200, 200), -1, cv2.LINE_AA)
+    px, py = int(hand.point[0]), int(hand.point[1])
+    if grabbed:
+        color = (0, 255, 0)        # green: holding the cube
+    elif hand.pinching:
+        color = (0, 200, 255)      # orange: pinching but not on the cube
+    else:
+        color = (160, 160, 160)    # grey: open hand
+    cv2.circle(img, (px, py), 10, color, 2, cv2.LINE_AA)
 
 
 def draw_overlay(img, obj, fps, show_help, physics):
@@ -108,9 +130,23 @@ def main():
     obj = Object3D()
     physics = Physics(gravity=args.gravity, restitution=args.restitution)
 
+    tracker = None
+    if not args.no_hands:
+        try:
+            from depth_ar.hand_tracker import HandTracker
+            tracker = HandTracker(
+                max_hands=args.max_hands,
+                pinch_on=args.pinch_on,
+                pinch_off=args.pinch_off,
+            )
+            print("Hand tracking enabled (pinch to grab the cube).")
+        except Exception as exc:  # MediaPipe missing or failed to init.
+            print(f"Hand tracking disabled ({exc}). Install mediapipe to enable.")
+
     scene_close = np.zeros((H, W), dtype=np.float32)
     show_help = True
     show_depth = False
+    grabbed = False
     frame_idx = 0
     last = time.time()
     fps = 0.0
@@ -137,10 +173,28 @@ def main():
             depth = estimator.infer(frame)
             scene_close = normalize_depth(depth, invert=args.invert_depth)
 
-        # Advance gravity/collision (renders the cube; no-op physics when off).
-        buffers = physics.step(obj, renderer, scene_close, dt)
+        # Hand interaction: pinch near the cube to grab, then drag it around.
+        hand = tracker.process(frame) if tracker is not None else None
+        if hand is not None and hand.pinching:
+            if not grabbed and near_cube(renderer, obj, hand.point[0], hand.point[1]):
+                grabbed = True
+            if grabbed:
+                grab_move(obj, renderer, hand.point[0], hand.point[1], scene_close,
+                          depth_follow=not args.no_depth_follow)
+        else:
+            grabbed = False
+
+        if grabbed:
+            # Held by the hand: position is set directly, physics paused.
+            buffers = renderer.render(obj)
+        else:
+            # Advance gravity/collision (no-op physics when gravity is off).
+            buffers = physics.step(obj, renderer, scene_close, dt)
         out = composite(frame, scene_close, buffers,
                         bias=args.bias, edge_feather=args.feather)
+
+        if hand is not None:
+            draw_hand(out, hand, grabbed)
 
         if show_depth:
             dvis = depth_to_color(scene_close)
@@ -167,6 +221,8 @@ def main():
         frame_idx += 1
 
     cap.release()
+    if tracker is not None:
+        tracker.close()
     cv2.destroyAllWindows()
 
 

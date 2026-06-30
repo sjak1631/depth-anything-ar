@@ -78,6 +78,7 @@ def main() -> int:
     print(f"[ok] previews written to {os.path.abspath(out_dir)}")
 
     physics_checks(W, H)
+    interaction_checks(W, H)
 
     print("ALL CHECKS PASSED")
     return 0
@@ -136,6 +137,41 @@ def physics_checks(W, H):
         phys3.step(obj3, renderer, empty, dt)
     assert obj3.ty == y0, "object moved while physics was disabled"
     print("[ok] gravity off: object stays put until SPACE is pressed")
+
+
+def interaction_checks(W, H):
+    from depth_ar import near_cube, grab_move
+
+    renderer = CubeRenderer(W, H)
+
+    # 8) project / unproject round-trip.
+    x, y, z = 0.4, -0.3, 2.5
+    u, v = renderer.project_point(x, y, z)
+    rx, ry = renderer.unproject(u, v, z)
+    assert abs(rx - x) < 1e-4 and abs(ry - y) < 1e-4, "project/unproject mismatch"
+    print("[ok] project/unproject round-trips")
+
+    # 9) near_cube: true on the cube centre, false far away.
+    obj = Object3D(tx=0.0, ty=0.0, tz=3.0, size=0.6)
+    cu, cv = renderer.project_point(obj.tx, obj.ty, obj.tz)
+    assert near_cube(renderer, obj, cu, cv), "grab should start at the cube centre"
+    assert not near_cube(renderer, obj, 5, 5), "far corner should not start a grab"
+    print("[ok] near_cube hit-test works")
+
+    # 10) grab_move with depth-follow: the cube tracks the hand point and its
+    #     depth matches the real surface there (tz = k / scene_close).
+    scene = np.full((H, W), 0.5, np.float32)   # uniform mid-depth surface
+    obj2 = Object3D(tx=0.0, ty=0.0, tz=3.0, scale_k=3.0, size=0.5)
+    target = (W * 0.7, H * 0.4)
+    for _ in range(40):  # let the EMA settle
+        grab_move(obj2, renderer, target[0], target[1], scene, depth_follow=True)
+    pu, pv = renderer.project_point(obj2.tx, obj2.ty, obj2.tz)
+    assert abs(pu - target[0]) < 1.0 and abs(pv - target[1]) < 1.0, \
+        "grabbed cube must project back to the hand point"
+    expected_tz = obj2.scale_k / 0.5
+    assert abs(obj2.tz - expected_tz) < 0.05, \
+        f"depth-follow tz {obj2.tz:.2f} != expected {expected_tz:.2f}"
+    print(f"[ok] grab_move: cube follows hand, tz->{obj2.tz:.2f} (depth matched)")
 
 
 if __name__ == "__main__":

@@ -64,6 +64,7 @@ Useful flags: `--no-fp16` (disable half precision), `--no-mirror`,
 | `U` / `O` | roll |
 | `+` / `-` | grow / shrink the cube |
 | `[` / `]` | decrease / increase depth scale `k` (occlusion alignment) |
+| pinch | thumb + index pinch near the cube to grab it; move your hand to drag |
 | `SPACE` | toggle gravity — drop the cube; it collides with real objects |
 | `V` | toggle depth-map overlay |
 | `H` | toggle help overlay |
@@ -88,6 +89,19 @@ So the cube only lands on things at its own depth — line the cube up with a re
 surface (tune `tz` with `Q`/`E` and `k` with `[`/`]`) and it will sit on top of
 it. Tune the feel with `--gravity` and `--restitution`.
 
+## Grab with your hand (MediaPipe)
+
+With `mediapipe` installed, the webcam tracks your hand. **Pinch** your thumb and
+index finger together over the cube to grab it (the on-screen marker turns
+green), then move your hand to drag the cube around. While grabbed, the cube's
+depth follows the real surface under your hand (`tz = k / scene_close`), so it
+tracks your hand in 3D and stays consistent with occlusion. Release the pinch to
+drop it — if gravity is on (`SPACE`), it falls from where you let go.
+
+Flags: `--no-hands` (disable), `--max-hands N`, `--pinch-on` / `--pinch-off`
+(pinch sensitivity, normalized by hand size), `--no-depth-follow` (keep `tz`
+fixed while dragging instead of matching the hand's depth).
+
 ## Project layout
 
 ```
@@ -98,6 +112,8 @@ depth_ar/
   object3d.py               # object pose/state + keyboard mapping
   compositor.py             # depth normalize + occlusion compositing
   physics.py                # depth-aware gravity + collision (SPACE)
+  interaction.py            # grab/move geometry (numpy only)
+  hand_tracker.py           # MediaPipe hand + pinch detection (optional)
 tools/selftest.py           # offline numpy-only check (no camera/torch needed)
 ```
 
