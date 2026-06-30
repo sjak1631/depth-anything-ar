@@ -68,7 +68,7 @@ everything works in physical units:
   `k/Z`, so with `k = 1` the ball's depth and the scene's depth compare directly
   — **no manual scale needed**.
 - The ball lives in meters (`tz` in m, radius in m), gravity is `9.8 m/s²`, and
-  throw/hit velocities are in m/s.
+  throw velocities are in m/s.
 - Grabbing snaps the ball to the **real metric depth** under your hand.
 
 Tunables: `--metric-min` / `--metric-max` (clamp the depth range, m), `--fov`
@@ -131,25 +131,6 @@ Flags: `--no-hands` (disable), `--max-hands N` (default 2), `--grasp-on` /
 `--grasp-off` (how closed the hand must be, normalized by hand size),
 `--no-depth-follow` (keep `tz` fixed while dragging).
 
-## Hit & bounce (hands and feet)
-
-When you are **not** holding the ball, your **hands and feet act as moving
-colliders** — touch the ball and it bounces off. The hitter is treated as an
-infinitely heavy moving paddle: with contact normal `n` (from the hitter to the
-ball) and the relative velocity along it, the ball reflects that component
-(`v' = v - (1+e)·vₙ·n`). So a resting ball struck by a moving hand shoots away in
-the hit direction with the hand's speed, and a ball flying at you is bounced back.
-Feet are tracked with MediaPipe Pose so you can kick it too.
-
-A hit only registers when the hitter is at roughly the ball's depth and actually
-moving into it (a receding or too-gentle touch adds no energy, which avoids
-jitter). Because a hit imparts velocity, it only moves the ball when **gravity is
-ON** (gravity off runs no physics).
-
-Flags: `--no-feet` (disable foot tracking), `--hit-restitution` (bounciness),
-`--hit-speed` (min impact speed to register), `--hit-gain` (scale post-hit speed;
->1 = livelier), `--hit-reach` (hand/foot-to-ball reach in px).
-
 ## Project layout
 
 ```
@@ -160,9 +141,8 @@ depth_ar/
   object3d.py               # object pose/velocity state + keyboard mapping
   compositor.py             # depth normalize + occlusion compositing
   physics.py                # gravity-on 3D ballistic sim; gravity-off = no physics
-  interaction.py            # grab/move + collision (hit/bounce) geometry (numpy only)
+  interaction.py            # grab/move geometry + throw velocity (numpy only)
   hand_tracker.py           # MediaPipe hand + whole-hand grasp detection (optional)
-  pose_tracker.py           # MediaPipe pose + foot tracking for hitting (optional)
 tools/selftest.py           # offline numpy-only check (no camera/torch needed)
 ```
 

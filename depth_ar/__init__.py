@@ -5,8 +5,7 @@ from .object3d import Object3D
 from .compositor import composite, normalize_depth, metric_closeness, depth_to_color
 from .physics import Physics
 from .interaction import (
-    sample_close, sample_close_nearest, near_cube, grab_move,
-    screen_velocity_to_world, collide_ball, VelocityTracker,
+    sample_close, sample_close_nearest, near_cube, grab_move, VelocityTracker,
 )
 
 __all__ = [
@@ -22,7 +21,5 @@ __all__ = [
     "sample_close_nearest",
     "near_cube",
     "grab_move",
-    "screen_velocity_to_world",
-    "collide_ball",
     "VelocityTracker",
 ]
