@@ -129,14 +129,46 @@ def physics_checks(W, H):
     assert final_bottom > 0.6 * H, f"cube did not fall toward the floor ({final_bottom})"
     print(f"[ok] gravity: free fall stopped at image floor (bottom row {final_bottom})")
 
-    # 7) Physics off -> the cube does not move under gravity.
+    # 7) Physics off + zero velocity -> the cube does not move (static placement).
     obj3 = Object3D(ty=1.0)
     phys3 = Physics()  # disabled by default
     y0 = obj3.ty
     for _ in range(120):
         phys3.step(obj3, renderer, empty, dt)
     assert obj3.ty == y0, "object moved while physics was disabled"
-    print("[ok] gravity off: object stays put until SPACE is pressed")
+    print("[ok] gravity off: a still object stays put until thrown")
+
+    # 8) Throw in gravity-off mode: the cube coasts then comes to rest (no fall).
+    obj4 = Object3D(tx=0.0, ty=0.0, tz=3.0, size=0.4)
+    obj4.set_velocity(1.2, 0.0, 0.0)   # flick to the right
+    phys4 = Physics(linear_damping=1.0)  # disabled (gravity off)
+    x0 = obj4.tx
+    moved = False
+    for _ in range(600):
+        phys4.step(obj4, renderer, empty, dt)
+        if obj4.tx > x0 + 0.1:
+            moved = True
+        if obj4.vx == 0.0 and obj4.vy == 0.0 and obj4.vz == 0.0:
+            break
+    assert moved, "thrown cube did not coast in gravity-off mode"
+    assert obj4.tx > x0, "thrown cube should end to the right of where it started"
+    assert abs(obj4.ty) < 1e-6, "no gravity -> the cube must not fall while floating"
+    assert obj4.vx == 0.0, "thrown cube should eventually come to rest (drag)"
+    print(f"[ok] throw (gravity off): cube coasted to tx={obj4.tx:.2f} and stopped")
+
+    # 9) Border bounce: a fast throw stays within the frame.
+    obj5 = Object3D(tx=0.0, ty=0.0, tz=3.0, size=0.4)
+    obj5.set_velocity(8.0, 0.0, 0.0)   # very fast, would leave the frame
+    phys5 = Physics(linear_damping=0.3)
+    inside = True
+    for _ in range(400):
+        phys5.step(obj5, renderer, empty, dt)
+        cu, _ = renderer.project_point(obj5.tx, obj5.ty, obj5.tz)
+        if cu < -1 or cu > W + 1:
+            inside = False
+            break
+    assert inside, "thrown cube escaped the frame instead of bouncing"
+    print("[ok] throw bounce: fast throw stays on screen (border reflection)")
 
 
 def interaction_checks(W, H):

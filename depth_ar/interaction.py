@@ -80,6 +80,6 @@ def grab_move(
         obj.tz += delta
 
     obj.tx, obj.ty = renderer.unproject(px, py, obj.tz)
-    # Held by the hand: cancel any physics motion.
-    obj.vy = 0.0
+    # Held by the hand: it is not resting on anything. Velocity is tracked by the
+    # caller (from the hand motion) so it can be thrown on release.
     obj.on_ground = False

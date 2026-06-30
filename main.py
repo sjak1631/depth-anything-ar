@@ -29,7 +29,7 @@ from depth_ar import (
 HELP_LINES = [
     "WASD: move   Q/E: closer/farther   +/-: size",
     "IJKL: rotate(pitch/yaw)   U/O: roll   [ ]: depth scale k",
-    "Pinch (thumb+index) to grab & move the cube with your hand",
+    "Pinch (thumb+index) to grab & move; release to throw (gravity off = float)",
     "SPACE: gravity on/off   V: depth view   H: help   R: reset   ESC: quit",
 ]
 
@@ -51,6 +51,8 @@ def parse_args():
     p.add_argument("--feather", type=int, default=1, help="edge feather radius in px (0=off)")
     p.add_argument("--gravity", type=float, default=3.5, help="gravity strength (world units/s^2)")
     p.add_argument("--restitution", type=float, default=0.4, help="bounciness 0..1 on collision")
+    p.add_argument("--damping", type=float, default=0.8,
+                   help="air drag for thrown cube (higher=stops sooner)")
     p.add_argument("--no-hands", action="store_true", help="disable MediaPipe hand grabbing")
     p.add_argument("--max-hands", type=int, default=1, help="max hands to track")
     p.add_argument("--pinch-on", type=float, default=0.45, help="pinch start threshold (smaller=tighter)")
@@ -128,7 +130,8 @@ def main():
 
     renderer = CubeRenderer(W, H)
     obj = Object3D()
-    physics = Physics(gravity=args.gravity, restitution=args.restitution)
+    physics = Physics(gravity=args.gravity, restitution=args.restitution,
+                      linear_damping=args.damping)
 
     tracker = None
     if not args.no_hands:
@@ -147,6 +150,7 @@ def main():
     show_help = True
     show_depth = False
     grabbed = False
+    prev_grab_pos = None        # last cube pos while grabbed (for throw velocity)
     frame_idx = 0
     last = time.time()
     fps = 0.0
@@ -187,14 +191,29 @@ def main():
                 grab_move(obj, renderer, hand.point[0], hand.point[1], scene_close,
                           depth_follow=not args.no_depth_follow,
                           depth_points=depth_points)
+                # Track hand velocity (EMA) so the cube can be thrown on release.
+                cur = np.array([obj.tx, obj.ty, obj.tz], dtype=np.float64)
+                if prev_grab_pos is None:
+                    obj.set_velocity(0.0, 0.0, 0.0)
+                else:
+                    inst = (cur - prev_grab_pos) / max(dt, 1e-3)
+                    a = 0.5
+                    obj.set_velocity(
+                        (1 - a) * obj.vx + a * inst[0],
+                        (1 - a) * obj.vy + a * inst[1],
+                        (1 - a) * obj.vz + a * inst[2],
+                    )
+                prev_grab_pos = cur
         else:
             grabbed = False
+            prev_grab_pos = None
 
         if grabbed:
-            # Held by the hand: position is set directly, physics paused.
+            # Held by the hand: position is set directly, physics paused. The
+            # velocity tracked above is what gets thrown when the pinch releases.
             buffers = renderer.render(obj)
         else:
-            # Advance gravity/collision (no-op physics when gravity is off).
+            # Gravity on -> fall/land; gravity off -> coast on throw velocity.
             buffers = physics.step(obj, renderer, scene_close, dt)
         out = composite(frame, scene_close, buffers,
                         bias=args.bias, edge_feather=args.feather)

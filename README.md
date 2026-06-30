@@ -87,7 +87,8 @@ it so it can fall again.
 
 So the cube only lands on things at its own depth — line the cube up with a real
 surface (tune `tz` with `Q`/`E` and `k` with `[`/`]`) and it will sit on top of
-it. Tune the feel with `--gravity` and `--restitution`.
+it. Tune the feel with `--gravity`, `--restitution`, and `--damping` (drag on a
+thrown cube when gravity is off).
 
 ## Grab with your hand (MediaPipe)
 
@@ -95,8 +96,13 @@ With `mediapipe` installed, the webcam tracks your hand. **Pinch** your thumb an
 index finger together over the cube to grab it (the on-screen marker turns
 green), then move your hand to drag the cube around. While grabbed, the cube's
 depth follows the real surface under your hand (`tz = k / scene_close`), so it
-tracks your hand in 3D and stays consistent with occlusion. Release the pinch to
-drop it — if gravity is on (`SPACE`), it falls from where you let go.
+tracks your hand in 3D and stays consistent with occlusion.
+
+**Throwing:** the cube keeps the velocity of your hand when you release the
+pinch. With gravity **off**, it floats off in that direction (zero-g), slows down
+from air drag (`--damping`), and bounces off the screen edges and real objects
+until it comes to rest. With gravity **on**, releasing instead drops it (a
+vertical toss/fall) from where you let go.
 
 Depth-follow is made robust against a classic failure: when you open your
 fingers to release, the thumb-index midpoint slides into the gap and the camera

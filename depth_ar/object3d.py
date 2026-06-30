@@ -24,9 +24,18 @@ class Object3D:
     size: float = 0.6          # half edge length in world units
     scale_k: float = 3.0       # manual depth scale (k in close = k / Z)
 
-    # Physics state (used when gravity is enabled).
+    # Physics state. vy is used by gravity; vx/vz add the throw (inertia) motion.
+    vx: float = 0.0            # horizontal velocity in world units / s
     vy: float = 0.0            # vertical velocity in world units / s
+    vz: float = 0.0            # depth velocity in world units / s
     on_ground: bool = False    # resting on a supporting surface
+
+    def set_velocity(self, vx: float, vy: float, vz: float) -> None:
+        self.vx, self.vy, self.vz = float(vx), float(vy), float(vz)
+
+    def stop(self) -> None:
+        self.vx = self.vy = self.vz = 0.0
+        self.on_ground = False
 
     # Step sizes.
     move_step: float = 0.08
@@ -49,8 +58,7 @@ class Object3D:
     def reset(self) -> None:
         for k, v in self._defaults.items():
             setattr(self, k, v)
-        self.vy = 0.0
-        self.on_ground = False
+        self.stop()
 
     def handle_key(self, key: int) -> bool:
         """Apply a key press (lowercased ASCII code from cv2.waitKey).

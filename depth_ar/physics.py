@@ -26,6 +26,11 @@ class Physics:
         band_frac: float = 0.15,
         sleep_speed: float = 0.25,
         max_dt: float = 0.05,
+        linear_damping: float = 0.8,
+        tz_near: float = 0.6,
+        tz_far: float = 12.0,
+        border_margin: int = 4,
+        penetrate_frac: float = 0.4,
     ):
         self.gravity = gravity
         self.restitution = restitution
@@ -35,6 +40,12 @@ class Physics:
         self.band_frac = band_frac
         self.sleep_speed = sleep_speed
         self.max_dt = max_dt
+        # Throw (inertia) parameters, used when gravity is off.
+        self.linear_damping = linear_damping   # velocity *= (1 - damping*dt)
+        self.tz_near = tz_near
+        self.tz_far = tz_far
+        self.border_margin = border_margin
+        self.penetrate_frac = penetrate_frac
         self.enabled = False
 
     def toggle(self) -> bool:
@@ -47,14 +58,19 @@ class Physics:
     # ------------------------------------------------------------------ #
 
     def step(self, obj, renderer, scene_close, dt):
-        """Advance one physics step; returns RenderBuffers for display."""
-        if not self.enabled:
-            obj.vy = 0.0
-            obj.on_ground = False
-            return renderer.render(obj)
+        """Advance one physics step; returns RenderBuffers for display.
 
+        Gravity on -> the cube falls and lands (vertical). Gravity off -> the
+        cube coasts with whatever throw velocity it has (3D inertia), so it can
+        be thrown by hand; it slows via drag and bounces off the borders / real
+        scene until it comes to rest.
+        """
         dt = float(np.clip(dt, 1e-4, self.max_dt))
+        if self.enabled:
+            return self._step_gravity(obj, renderer, scene_close, dt)
+        return self._step_inertia(obj, renderer, scene_close, dt)
 
+    def _step_gravity(self, obj, renderer, scene_close, dt):
         # Resting: stay put until the support disappears (or it's disturbed).
         if obj.on_ground:
             buf = renderer.render(obj)
@@ -80,6 +96,85 @@ class Physics:
             return renderer.render(obj)
 
         return buf
+
+    # ------------------------------------------------------------------ #
+
+    def _step_inertia(self, obj, renderer, scene_close, dt):
+        """Gravity-off throw: coast on velocity, drag, bounce, then sleep."""
+        obj.on_ground = False
+        speed2 = obj.vx ** 2 + obj.vy ** 2 + obj.vz ** 2
+        if speed2 < self.sleep_speed ** 2:
+            obj.stop()
+            return renderer.render(obj)
+
+        # Air drag.
+        damp = max(0.0, 1.0 - self.linear_damping * dt)
+        obj.vx *= damp
+        obj.vy *= damp
+        obj.vz *= damp
+
+        prev = (obj.tx, obj.ty, obj.tz)
+        obj.tx += obj.vx * dt
+        obj.ty += obj.vy * dt
+        obj.tz += obj.vz * dt
+
+        # Depth walls: bounce when flying too near or too far.
+        if obj.tz < self.tz_near:
+            obj.tz = self.tz_near
+            obj.vz = -obj.vz * self.restitution
+        elif obj.tz > self.tz_far:
+            obj.tz = self.tz_far
+            obj.vz = -obj.vz * self.restitution
+
+        buf = renderer.render(obj)
+
+        # Screen-edge bounce (keeps the cube in view).
+        if self._bounce_borders(obj, renderer):
+            buf = renderer.render(obj)
+
+        # Scene collision: if the cube has run into a real surface (mostly
+        # swallowed by nearer geometry), back out and bounce off it.
+        if self._penetrating(buf, scene_close):
+            obj.tx, obj.ty, obj.tz = prev
+            obj.vx *= -self.restitution
+            obj.vy *= -self.restitution
+            obj.vz *= -self.restitution
+            buf = renderer.render(obj)
+
+        return buf
+
+    def _bounce_borders(self, obj, renderer) -> bool:
+        """Reflect velocity and clamp the cube centre inside the image."""
+        cu, cv = renderer.project_point(obj.tx, obj.ty, obj.tz)
+        m = self.border_margin
+        z = obj.tz
+        hit = False
+
+        if cu < m or cu > renderer.width - 1 - m:
+            x_lo, _ = renderer.unproject(m, cv, z)
+            x_hi, _ = renderer.unproject(renderer.width - 1 - m, cv, z)
+            obj.tx = float(np.clip(obj.tx, min(x_lo, x_hi), max(x_lo, x_hi)))
+            obj.vx = -obj.vx * self.restitution
+            hit = True
+
+        if cv < m or cv > renderer.height - 1 - m:
+            _, y_lo = renderer.unproject(cu, m, z)
+            _, y_hi = renderer.unproject(cu, renderer.height - 1 - m, z)
+            obj.ty = float(np.clip(obj.ty, min(y_lo, y_hi), max(y_lo, y_hi)))
+            obj.vy = -obj.vy * self.restitution
+            hit = True
+
+        return hit
+
+    def _penetrating(self, buf, scene_close) -> bool:
+        if not buf.mask.any():
+            return False
+        m = buf.mask
+        n = int(m.sum())
+        if n < self.min_contact_px:
+            return False
+        blocked = scene_close[m] > (buf.close[m] + self.margin)
+        return float(blocked.mean()) >= self.penetrate_frac
 
     # ------------------------------------------------------------------ #
 
