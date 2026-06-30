@@ -37,11 +37,19 @@ def sample_close_nearest(scene_close: np.ndarray, points, win: int = 7) -> float
 
 
 def near_cube(renderer, obj, px: float, py: float, extra_px: float = 30.0) -> bool:
-    """True if (px, py) is close to the cube's projected centre."""
+    """True if (px, py) is close to the ball's projected centre."""
     cu, cv = renderer.project_point(obj.tx, obj.ty, obj.tz)
-    # Approximate on-screen radius of the cube plus a grab margin.
+    # Approximate on-screen radius of the ball plus a reach margin.
     radius = 1.5 * renderer.f * obj.size / max(obj.tz, 1e-3) + extra_px
     return (cu - px) ** 2 + (cv - py) ** 2 <= radius * radius
+
+
+def screen_velocity_to_world(renderer, p_prev, p_cur, z: float, dt: float):
+    """Convert a pixel displacement at depth ``z`` into a world (x, y) velocity."""
+    x0, y0 = renderer.unproject(p_prev[0], p_prev[1], z)
+    x1, y1 = renderer.unproject(p_cur[0], p_cur[1], z)
+    dt = max(dt, 1e-3)
+    return (x1 - x0) / dt, (y1 - y0) / dt
 
 
 def grab_move(

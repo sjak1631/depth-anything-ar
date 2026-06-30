@@ -23,14 +23,14 @@ import numpy as np
 
 from depth_ar import (
     SphereRenderer, Object3D, Physics, composite, normalize_depth, depth_to_color,
-    near_cube, grab_move,
+    near_cube, grab_move, sample_close, screen_velocity_to_world,
 )
 
 HELP_LINES = [
-    "WASD: move   Q/E: closer/farther   +/-: size",
-    "[ ]: depth scale k",
+    "WASD: move   Q/E: closer/farther   +/-: size   [ ]: depth scale k",
     "Close your whole hand over the ball to grab & move it",
-    "Gravity ON: release = ballistic throw.  Gravity OFF: it just stays put.",
+    "Gravity ON: release = ballistic throw, or KICK with your foot",
+    "Gravity OFF: no physics (the ball just stays where you leave it)",
     "SPACE: gravity on/off   V: depth   H: help   R: reset   ESC: quit",
 ]
 
@@ -59,6 +59,14 @@ def parse_args():
     p.add_argument("--grasp-off", type=float, default=1.3, help="grasp release threshold")
     p.add_argument("--no-depth-follow", action="store_true",
                    help="while grabbing, keep tz fixed instead of matching the hand's depth")
+    p.add_argument("--no-feet", action="store_true",
+                   help="disable MediaPipe pose / foot kicking")
+    p.add_argument("--kick-speed", type=float, default=1.5,
+                   help="min foot speed (world units/s) to register a kick")
+    p.add_argument("--kick-gain", type=float, default=1.4,
+                   help="how much of the foot's velocity is transferred to the ball")
+    p.add_argument("--kick-reach", type=float, default=55.0,
+                   help="foot-to-ball reach in px to count as a touch")
     return p.parse_args()
 
 
@@ -85,6 +93,15 @@ def draw_hand(img, hand, grabbed):
     else:
         color = (160, 160, 160)    # grey: open hand
     cv2.circle(img, (px, py), 12, color, 2, cv2.LINE_AA)
+
+
+def draw_foot(img, foot, hot):
+    """Draw the toe point; bright when it can kick the ball."""
+    px, py = int(foot.point[0]), int(foot.point[1])
+    color = (0, 255, 255) if hot else (120, 120, 120)
+    cv2.circle(img, (px, py), 9, color, 2, cv2.LINE_AA)
+    cv2.putText(img, foot.label, (px + 10, py), cv2.FONT_HERSHEY_SIMPLEX,
+                0.5, color, 1, cv2.LINE_AA)
 
 
 def draw_overlay(img, obj, fps, show_help, physics):
@@ -145,12 +162,23 @@ def main():
         except Exception as exc:  # MediaPipe missing or failed to init.
             print(f"Hand tracking disabled ({exc}). Install mediapipe to enable.")
 
+    pose = None
+    if not args.no_feet:
+        try:
+            from depth_ar.pose_tracker import PoseTracker
+            pose = PoseTracker()
+            print("Foot tracking enabled (kick the ball; gravity must be ON).")
+        except Exception as exc:
+            print(f"Foot tracking disabled ({exc}). Install mediapipe to enable.")
+
     scene_close = np.zeros((H, W), dtype=np.float32)
     show_help = True
     show_depth = False
     grabbed = False
     grab_label = None           # which hand (Left/Right) is holding the ball
     prev_grab_pos = None        # last ball pos while grabbed (for throw velocity)
+    prev_feet = {}              # label -> last toe pixel (for foot velocity)
+    kick_cooldown = 0.0         # seconds until another kick is allowed
     frame_idx = 0
     last = time.time()
     fps = 0.0
@@ -233,6 +261,32 @@ def main():
                 )
             prev_grab_pos = cur
 
+        # Foot interaction: kick the ball. A kick imparts velocity, so it only
+        # produces motion when gravity is ON (gravity OFF runs no physics).
+        feet = pose.process(frame) if pose is not None else []
+        kick_cooldown = max(0.0, kick_cooldown - dt)
+        hot_feet = set()
+        ball_close = obj.scale_k / max(obj.tz, 1e-3)
+        for foot in feet:
+            cur = foot.point
+            prev = prev_feet.get(foot.label)
+            prev_feet[foot.label] = cur.copy()
+            if grabbed or prev is None:
+                continue
+            if not near_cube(renderer, obj, cur[0], cur[1], extra_px=args.kick_reach):
+                continue
+            wvx, wvy = screen_velocity_to_world(renderer, prev, cur, obj.tz, dt)
+            speed = (wvx * wvx + wvy * wvy) ** 0.5
+            # Depth gate: the foot must be at / in front of the ball's depth.
+            foot_close = sample_close(scene_close, cur[0], cur[1])
+            if physics.enabled and foot_close >= ball_close - 0.3 and speed >= args.kick_speed:
+                hot_feet.add(foot.label)
+                if kick_cooldown <= 0.0:
+                    obj.set_velocity(wvx * args.kick_gain, wvy * args.kick_gain, 0.0)
+                    obj.on_ground = False   # wake a resting ball so it launches
+                    kick_cooldown = 0.3
+        prev_feet = {f.label: prev_feet[f.label] for f in feet}
+
         if grabbed:
             # Held by the hand: position is set directly, physics paused.
             buffers = renderer.render(obj)
@@ -244,6 +298,8 @@ def main():
 
         for h in hands:
             draw_hand(out, h, grabbed and h.label == grab_label)
+        for foot in feet:
+            draw_foot(out, foot, foot.label in hot_feet)
 
         if show_depth:
             dvis = depth_to_color(scene_close)
@@ -272,6 +328,8 @@ def main():
     cap.release()
     if tracker is not None:
         tracker.close()
+    if pose is not None:
+        pose.close()
     cv2.destroyAllWindows()
 
 

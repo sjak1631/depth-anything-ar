@@ -177,6 +177,28 @@ def physics_checks(W, H):
     print(f"[ok] ballistic throw (gravity on): arced right to x={x_max:.2f}, "
           f"peaked at y={y_max:.2f}, fell to y={obj6.ty:.2f}")
 
+    # 10) Kick: a foot's screen motion converts to a world velocity that, under
+    #     gravity, launches a resting ball (and does nothing in gravity-off).
+    from depth_ar import screen_velocity_to_world
+
+    renderer2 = SphereRenderer(W, H)
+    obj7 = Object3D(tx=0.0, ty=0.0, tz=3.0, scale_k=3.0, size=0.4)
+    obj7.on_ground = True                      # ball is resting
+    cu, cv = renderer2.project_point(obj7.tx, obj7.ty, obj7.tz)
+    p_prev = np.array([cu - 30, cv], np.float32)
+    p_cur = np.array([cu + 30, cv], np.float32)   # foot sweeps left->right past it
+    wvx, wvy = screen_velocity_to_world(renderer2, p_prev, p_cur, obj7.tz, dt)
+    assert wvx > 0, "rightward foot sweep should give +x world velocity"
+    obj7.set_velocity(wvx, wvy, 0.0)
+    obj7.on_ground = False
+    phys7 = Physics(gravity=4.0)
+    phys7.enabled = True
+    x0 = obj7.tx
+    for _ in range(40):
+        phys7.step(obj7, renderer2, empty, dt)
+    assert obj7.tx > x0 + 0.1, "kicked ball should fly sideways under gravity"
+    print(f"[ok] kick: foot sweep -> ball launched to x={obj7.tx:.2f}")
+
 
 def interaction_checks(W, H):
     from depth_ar import near_cube, grab_move

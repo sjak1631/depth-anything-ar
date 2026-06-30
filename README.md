@@ -103,6 +103,21 @@ Flags: `--no-hands` (disable), `--max-hands N` (default 2), `--grasp-on` /
 `--grasp-off` (how closed the hand must be, normalized by hand size),
 `--no-depth-follow` (keep `tz` fixed while dragging).
 
+## Kick with your foot (MediaPipe Pose)
+
+The webcam also tracks your body, so you can **kick** the ball with your foot.
+When a foot (toe) sweeps into the ball fast enough — and is at roughly the ball's
+depth — the foot's velocity is transferred to the ball. Because a kick is an
+impulse (it sets the ball's velocity), it only produces motion when **gravity is
+ON** (gravity off runs no physics): the ball gets launched and arcs ballistically.
+
+The toe marker brightens (yellow) when a foot is in range and moving fast enough
+to kick. A short cooldown prevents one swing from registering many times.
+
+Flags: `--no-feet` (disable), `--kick-speed` (min foot speed to register, world
+units/s), `--kick-gain` (fraction of foot velocity transferred; >1 = livelier),
+`--kick-reach` (foot-to-ball reach in px to count as a touch).
+
 ## Project layout
 
 ```
@@ -113,8 +128,9 @@ depth_ar/
   object3d.py               # object pose/velocity state + keyboard mapping
   compositor.py             # depth normalize + occlusion compositing
   physics.py                # gravity-on 3D ballistic sim; gravity-off = no physics
-  interaction.py            # grab/move geometry (numpy only)
+  interaction.py            # grab/move/kick geometry (numpy only)
   hand_tracker.py           # MediaPipe hand + whole-hand grasp detection (optional)
+  pose_tracker.py           # MediaPipe pose + foot tracking for kicking (optional)
 tools/selftest.py           # offline numpy-only check (no camera/torch needed)
 ```
 
